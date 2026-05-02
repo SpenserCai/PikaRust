@@ -164,6 +164,9 @@ impl Engine {
         &self.position
     }
 
+    /// Start a search and return a control handle. Non-blocking.
+    /// The caller controls the search lifecycle through the returned
+    /// [`SearchHandle`] (stop, wait, ponderhit).
     pub fn go(&mut self, limits: &SearchLimits) -> SearchHandle {
         self.ensure_thread_pool();
         let piece_counts = *self.position.piece_count_array();

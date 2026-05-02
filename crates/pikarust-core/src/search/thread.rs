@@ -206,27 +206,6 @@ impl ThreadPool {
         rx
     }
 
-    pub fn wait_for_search(&mut self) {
-        if let Some(h) = self.collector_handle.take() {
-            let _ = h.join();
-        }
-        while let Ok(workers) = self.worker_inbox.try_recv() {
-            self.workers.extend(workers);
-        }
-        for handle in &mut self.handles {
-            if let Some(h) = handle.take() {
-                match h.join() {
-                    Ok(w) => self.workers.push(w),
-                    Err(_) => {
-                        log::error!("search thread join failed unexpectedly");
-                    }
-                }
-            }
-        }
-        self.handles.clear();
-        self.workers.sort_by_key(|w| w.thread_idx);
-    }
-
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
@@ -237,109 +216,6 @@ impl ThreadPool {
 
     pub const fn stop_flag(&self) -> &Arc<AtomicBool> {
         &self.stop
-    }
-
-    pub fn nodes_searched(&self) -> u64 {
-        self.workers.iter().map(Worker::node_count).sum()
-    }
-
-    pub fn best_thread_idx(&self) -> usize {
-        if self.workers.is_empty() {
-            return 0;
-        }
-
-        let mut min_score = VALUE_NONE;
-        for w in &self.workers {
-            if !w.root_moves.is_empty() {
-                min_score = min_score.min(w.root_moves[0].score);
-            }
-        }
-
-        let mut votes: std::collections::HashMap<u16, i64> = std::collections::HashMap::new();
-
-        let voting_value = |w: &Worker| -> i64 {
-            if w.root_moves.is_empty() {
-                return 0;
-            }
-            i64::from(w.root_moves[0].score - min_score + 14) * i64::from(w.completed_depth)
-        };
-
-        for w in &self.workers {
-            if !w.root_moves.is_empty() {
-                let key = w.root_moves[0].pv[0].raw();
-                *votes.entry(key).or_insert(0) += voting_value(w);
-            }
-        }
-
-        let mut best_idx = 0;
-        let mut best_voting = i64::MIN;
-
-        for (i, w) in self.workers.iter().enumerate() {
-            if w.root_moves.is_empty() {
-                continue;
-            }
-            let key = w.root_moves[0].pv[0].raw();
-            let v = votes.get(&key).copied().unwrap_or(0);
-
-            let score = w.root_moves[0].score;
-            let is_decisive_score = score != -VALUE_INFINITE && is_decisive(score);
-
-            if is_decisive_score {
-                if i == best_idx
-                    || !is_decisive(self.workers[best_idx].root_moves[0].score)
-                    || score.abs() > self.workers[best_idx].root_moves[0].score.abs()
-                {
-                    best_idx = i;
-                }
-            } else if !is_decisive(self.workers[best_idx].root_moves[0].score)
-                && (v > best_voting
-                    || (v == best_voting
-                        && voting_value(w) > voting_value(&self.workers[best_idx])))
-            {
-                best_idx = i;
-                best_voting = v;
-            }
-        }
-
-        best_idx
-    }
-
-    pub fn best_move(&self) -> Option<Move> {
-        let idx = self.best_thread_idx();
-        if idx < self.workers.len() && !self.workers[idx].root_moves.is_empty() {
-            Some(self.workers[idx].root_moves[0].pv[0])
-        } else {
-            None
-        }
-    }
-
-    pub fn best_score(&self) -> Value {
-        let idx = self.best_thread_idx();
-        if idx < self.workers.len() && !self.workers[idx].root_moves.is_empty() {
-            self.workers[idx].root_moves[0].score
-        } else {
-            -VALUE_INFINITE
-        }
-    }
-
-    pub fn worker(&self, idx: usize) -> &Worker {
-        &self.workers[idx]
-    }
-
-    pub fn worker_mut(&mut self, idx: usize) -> &mut Worker {
-        &mut self.workers[idx]
-    }
-
-    pub fn num_threads(&self) -> usize {
-        self.workers.len()
-    }
-
-    pub fn tt(&self) -> &TranspositionTable {
-        &self.tt
-    }
-
-    pub const fn new_search(&self) {
-        // tt.new_search() is called in start_search
     }
 }
 

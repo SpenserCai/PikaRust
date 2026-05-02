@@ -112,7 +112,7 @@ async fn evaluate_handler(
 
     Ok(Json(EvaluateResponse {
         score: ScoreInfo {
-            cp: search_result.score,
+            cp: search_result.score_cp,
         },
         depth: search_result.depth,
         nodes: search_result.nodes,
@@ -149,7 +149,7 @@ async fn bestmove_handler(
         bestmove: search_result.best_move.to_string(),
         ponder: search_result.ponder_move.map(|m| m.to_string()),
         score: ScoreInfo {
-            cp: search_result.score,
+            cp: search_result.score_cp,
         },
         depth: search_result.depth,
     }))

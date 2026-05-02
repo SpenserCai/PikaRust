@@ -151,12 +151,17 @@ async fn handle_go(session: &Session, cmd: &WsCommand, tx: &mpsc::Sender<String>
     };
 
     session.touch().await;
-    let mut guard = session.engine.lock().await;
-    let Some(engine) = guard.as_mut() else {
-        return;
+    let result = {
+        let mut guard = session.engine.lock().await;
+        let Some(engine) = guard.as_mut() else {
+            return;
+        };
+        let handle = engine.go(&limits);
+        drop(guard);
+        tokio::task::spawn_blocking(move || handle.wait())
+            .await
+            .unwrap_or_default()
     };
-    let result = engine.go(&limits).wait();
-    drop(guard);
 
     let resp = serde_json::to_string(&WsResponse::BestMove {
         request_id,
