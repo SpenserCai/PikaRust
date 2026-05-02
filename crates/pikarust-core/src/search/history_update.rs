@@ -256,6 +256,24 @@ impl Worker {
         }
     }
 
+    /// Get combined continuation history value for a move (contHist\[0\] + contHist\[1\]).
+    /// Used in Step 13 quiet pruning.
+    pub fn get_cont_hist_value(&self, ply: i32, pc: Piece, to: Square) -> i32 {
+        let ss = self.ss_idx(ply);
+        let mut val = 0i32;
+        for offset in 1..=2 {
+            if ss >= offset {
+                let idx = self.ss_cont_hist_indices[ss - offset];
+                val += i32::from(
+                    self.continuation_history
+                        .get(idx.in_check, idx.capture, idx.pc, idx.sq)
+                        .get(pc, to),
+                );
+            }
+        }
+        val
+    }
+
     /// Helper: get the `ContHistIndex` for `(ss - offset)`, used for
     /// continuation correction history lookups.
     #[inline]
