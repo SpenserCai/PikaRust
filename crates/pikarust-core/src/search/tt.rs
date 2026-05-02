@@ -468,8 +468,10 @@ mod tests {
     #[test]
     fn test_tt_different_keys_same_cluster() {
         let tt = TranspositionTable::new(1);
+        // Use keys with different low 16 bits so they occupy separate entries
+        // within the same cluster (same high bits → same cluster index).
         let key1: Key = 0x0000_0000_0000_0001;
-        let key2: Key = 0x0000_0000_0001_0001;
+        let key2: Key = 0x0000_0000_0000_0002;
         let m1 = Move::make(Square::SQ_A0, Square::SQ_A1);
         let m2 = Move::make(Square::SQ_B0, Square::SQ_B1);
 

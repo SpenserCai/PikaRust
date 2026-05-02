@@ -1,6 +1,10 @@
+use std::time::Instant;
+
 use thiserror::Error;
 
 use crate::position::{FenError, Position};
+use crate::search::ThreadPool;
+use crate::search::time::SearchLimits as InternalSearchLimits;
 use crate::types::{Depth, Move, Square, Value};
 
 use super::options::{EngineOptions, OptionError, UciOption};
@@ -41,6 +45,7 @@ pub struct SearchResult {
 pub struct Engine {
     options: EngineOptions,
     position: Position,
+    thread_pool: Option<ThreadPool>,
 }
 
 impl Engine {
@@ -49,11 +54,26 @@ impl Engine {
         Ok(Self {
             options: EngineOptions::default(),
             position,
+            thread_pool: None,
         })
     }
 
+    fn ensure_thread_pool(&mut self) {
+        if self.thread_pool.is_none() {
+            self.thread_pool = Some(ThreadPool::new(self.options.threads, self.options.hash_mb));
+        }
+    }
+
     pub fn set_option(&mut self, name: &str, value: &str) -> Result<(), EngineError> {
+        let old_threads = self.options.threads;
+        let old_hash = self.options.hash_mb;
         self.options.set(name, value)?;
+
+        if self.thread_pool.is_some()
+            && (self.options.threads != old_threads || self.options.hash_mb != old_hash)
+        {
+            self.thread_pool = Some(ThreadPool::new(self.options.threads, self.options.hash_mb));
+        }
         Ok(())
     }
 
@@ -63,6 +83,9 @@ impl Engine {
 
     pub fn new_game(&mut self) -> Result<(), EngineError> {
         self.position = Position::from_fen(START_FEN)?;
+        if let Some(tp) = &mut self.thread_pool {
+            tp.clear();
+        }
         Ok(())
     }
 
@@ -84,21 +107,79 @@ impl Engine {
         &self.position
     }
 
-    pub const fn go(&self, _limits: &SearchLimits) -> SearchResult {
+    pub fn go(&mut self, limits: &SearchLimits) -> SearchResult {
+        self.ensure_thread_pool();
+        let tp = self.thread_pool.as_mut().expect("thread pool initialized");
+
+        let search_limits = convert_limits(limits);
+        tp.start_search(&self.position, &search_limits);
+        tp.wait_for_search();
+
+        let best_move = tp.best_move().unwrap_or(Move::NONE);
+        let score = tp.best_score();
+        let nodes = tp.nodes_searched();
+
+        let idx = tp.best_thread_idx();
+        let depth = tp.worker(idx).completed_depth;
+
+        let ponder_move = if best_move == Move::NONE {
+            None
+        } else {
+            let w = tp.worker(idx);
+            if !w.root_moves.is_empty() && w.root_moves[0].pv.len() > 1 {
+                Some(w.root_moves[0].pv[1])
+            } else {
+                None
+            }
+        };
+
         SearchResult {
-            best_move: Move::NONE,
-            ponder_move: None,
-            score: 0,
-            depth: 0,
-            nodes: 0,
+            best_move,
+            ponder_move,
+            score,
+            depth,
+            nodes,
         }
     }
 
-    pub const fn stop(&self) {}
+    pub fn stop(&self) {
+        if let Some(tp) = &self.thread_pool {
+            tp.stop();
+        }
+    }
 
     pub fn uci_options() -> Vec<UciOption> {
         EngineOptions::uci_options()
     }
+}
+
+fn convert_limits(limits: &SearchLimits) -> InternalSearchLimits {
+    let mut sl = InternalSearchLimits::new();
+    sl.start_time = Instant::now();
+
+    if let Some(d) = limits.depth {
+        sl.depth = d;
+    }
+    if let Some(n) = limits.nodes {
+        sl.nodes = n;
+    }
+    for i in 0..2 {
+        if let Some(t) = limits.time[i] {
+            sl.time[i] = t.max(0) as u64;
+        }
+        if let Some(inc) = limits.inc[i] {
+            sl.inc[i] = inc.max(0) as u64;
+        }
+    }
+    if let Some(mtg) = limits.movestogo {
+        sl.movestogo = mtg;
+    }
+    if let Some(mt) = limits.movetime {
+        sl.movetime = mt.max(0) as u64;
+    }
+    sl.infinite = limits.infinite;
+    sl.ponder_mode = limits.ponder;
+    sl
 }
 
 fn parse_uci_move(pos: &Position, s: &str) -> Option<Move> {
@@ -132,6 +213,7 @@ mod tests {
         let engine = Engine::new().unwrap();
         assert_eq!(engine.options().hash_mb, 16);
         assert_eq!(engine.options().threads, 1);
+        assert!(engine.thread_pool.is_none());
     }
 
     #[test]
@@ -145,6 +227,16 @@ mod tests {
     fn test_engine_set_option_error() {
         let mut engine = Engine::new().unwrap();
         assert!(engine.set_option("Nonexistent", "42").is_err());
+    }
+
+    #[test]
+    fn test_engine_set_option_recreates_pool() {
+        let mut engine = Engine::new().unwrap();
+        engine.ensure_thread_pool();
+        assert!(engine.thread_pool.is_some());
+        engine.set_option("Threads", "2").unwrap();
+        assert!(engine.thread_pool.is_some());
+        assert_eq!(engine.options().threads, 2);
     }
 
     #[test]
@@ -183,11 +275,23 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_go_placeholder() {
-        let engine = Engine::new().unwrap();
-        let result = engine.go(&SearchLimits::default());
-        assert_eq!(result.best_move, Move::NONE);
-        assert_eq!(result.score, 0);
+    fn test_engine_go_finds_legal_move() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(1),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+        assert!(result.depth >= 1);
+    }
+
+    #[test]
+    fn test_engine_stop() {
+        let mut engine = Engine::new().unwrap();
+        engine.stop();
+        engine.ensure_thread_pool();
+        engine.stop();
     }
 
     #[test]
@@ -207,6 +311,44 @@ mod tests {
         assert!(limits.movetime.is_none());
         assert!(!limits.infinite);
         assert!(!limits.ponder);
+    }
+
+    #[test]
+    fn test_convert_limits_depth() {
+        let limits = SearchLimits {
+            depth: Some(5),
+            ..SearchLimits::default()
+        };
+        let sl = convert_limits(&limits);
+        assert_eq!(sl.depth, 5);
+        assert_eq!(sl.nodes, 0);
+        assert!(!sl.infinite);
+    }
+
+    #[test]
+    fn test_convert_limits_time() {
+        let limits = SearchLimits {
+            time: [Some(60000), Some(30000)],
+            inc: [Some(1000), Some(500)],
+            movestogo: Some(20),
+            ..SearchLimits::default()
+        };
+        let sl = convert_limits(&limits);
+        assert_eq!(sl.time[0], 60000);
+        assert_eq!(sl.time[1], 30000);
+        assert_eq!(sl.inc[0], 1000);
+        assert_eq!(sl.inc[1], 500);
+        assert_eq!(sl.movestogo, 20);
+    }
+
+    #[test]
+    fn test_convert_limits_infinite() {
+        let limits = SearchLimits {
+            infinite: true,
+            ..SearchLimits::default()
+        };
+        let sl = convert_limits(&limits);
+        assert!(sl.infinite);
     }
 
     #[test]

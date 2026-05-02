@@ -640,7 +640,9 @@ mod tests {
             }
             count += 1;
         }
-        assert_eq!(count, 0, "no captures from start position");
+        // Start position has 2 cannon captures (each cannon jumps over a
+        // friendly pawn to capture the opposing pawn on the same file).
+        assert_eq!(count, 2, "cannon captures from start position in qsearch");
     }
 
     #[test]
@@ -664,7 +666,10 @@ mod tests {
             }
             count += 1;
         }
-        assert_eq!(count, 0, "no captures from start position, quiets skipped");
+        assert_eq!(
+            count, 2,
+            "only cannon captures from start position, quiets skipped"
+        );
     }
 
     #[test]
