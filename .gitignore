@@ -1,0 +1,58 @@
+# ===== Rust =====
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# ===== Node / Frontend =====
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+src/**/*.js
+
+# ===== Python =====
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# ===== Tauri =====
+src-tauri/target/
+src-tauri/gen/
+
+# ===== macOS =====
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+*.swp
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.iml
+
+# ===== Project specific =====
+tmps/
+.kiro/
+refs/
+scripts/sync-private.sh
+
+# ===== Secrets =====
+secrets.toml
+*.pem
+*.key
+.env.apple-signing
+node_modules/
+dist/
+target/
+Cargo.lock
+jstclaw_data
+.claude/
+CLAUDE.local.md
+CLAUDE.md
+.mcp.json
+.cargo/
+
+dev_docs/
