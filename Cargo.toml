@@ -1,0 +1,68 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pikarust-core",
+    "crates/uci-rs",
+    "crates/pikarust-app",
+    "crates/pikarust-bench",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "GPL-3.0-or-later"
+authors = ["PikaRust Team"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+pikarust-core = { path = "crates/pikarust-core" }
+uci-rs = { path = "crates/uci-rs" }
+
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+zstd = "0.13"
+memmap2 = "0.9"
+crossbeam-utils = "0.8"
+num_cpus = "1"
+
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap = "6"
+
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_transmute_annotations = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.build-override]
+opt-level = 3
+
+[profile.bench]
+inherits = "release"
+strip = false
+debug = true

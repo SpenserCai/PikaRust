@@ -1,0 +1,33 @@
+[package]
+name = "pikarust-app"
+description = "PikaRust application layer - UCI CLI and SaaS server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pikarust"
+path = "src/bin/pikarust.rs"
+
+[[bin]]
+name = "pikarust-server"
+path = "src/bin/pikarust-server.rs"
+
+[dependencies]
+pikarust-core = { workspace = true }
+uci-rs = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

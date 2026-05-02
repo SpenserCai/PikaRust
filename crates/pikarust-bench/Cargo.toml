@@ -1,0 +1,31 @@
+[package]
+name = "pikarust-bench"
+description = "Benchmarks and Perft verification for PikaRust"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pikarust-core = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "bitboard_bench"
+harness = false
+
+[[bench]]
+name = "movegen_bench"
+harness = false
+
+[[bench]]
+name = "nnue_bench"
+harness = false
+
+[[bench]]
+name = "search_bench"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "uci-rs"
+description = "Universal Chess Interface (UCI) protocol library for Rust"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

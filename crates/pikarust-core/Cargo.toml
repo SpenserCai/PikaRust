@@ -1,0 +1,29 @@
+[package]
+name = "pikarust-core"
+description = "Core engine library for PikaRust Chinese chess engine"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+zstd = { workspace = true }
+memmap2 = { workspace = true, optional = true }
+crossbeam-utils = { workspace = true }
+num_cpus = { workspace = true }
+
+[dev-dependencies]
+
+[features]
+default = ["simd-auto"]
+simd-auto = []
+simd-avx2 = []
+simd-neon = []
+simd-none = []
+large-pages = []
+
+[lints]
+workspace = true
