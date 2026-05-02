@@ -370,8 +370,18 @@ impl Worker {
             }
         }
 
-        // Phase D: evalDiff history update
-        if ss >= 1
+        // Read and reset priorReduction (C++: priorReduction = (ss-1)->reduction; (ss-1)->reduction = 0)
+        let prior_reduction = if ss >= 1 {
+            let v = self.ss_reductions[ss - 1];
+            self.ss_reductions[ss - 1] = 0;
+            v
+        } else {
+            0
+        };
+
+        // evalDiff history update (C++ skips this when in_check via goto moves_loop)
+        if !in_check
+            && ss >= 1
             && self.ss_current_moves[ss - 1].is_ok()
             && !self.ss_in_check[ss - 1]
             && !prior_capture
@@ -398,13 +408,6 @@ impl Worker {
                 }
             }
         }
-
-        // Phase B: opponentWorsening and priorReduction
-        let prior_reduction = if ss >= 1 {
-            self.ss_reductions[ss - 1]
-        } else {
-            0
-        };
         let opponent_worsening = ss >= 1
             && is_valid(self.ss_static_evals[ss])
             && is_valid(self.ss_static_evals[ss - 1])
@@ -465,11 +468,7 @@ impl Worker {
                         let tt_bonus = (108 * depth - 60).min(1433);
                         self.update_quiet_histories(ply, tt_data.tt_move, tt_bonus);
                     }
-                    if prev_sq.is_some()
-                        && ss >= 1
-                        && self.ss_move_counts[ss - 1] < 3
-                        && !prior_capture
-                    {
+                    if ss >= 1 && self.ss_move_counts[ss - 1] < 3 && !prior_capture {
                         if let Some(psq) = prev_sq {
                             let pc_on_prev = self.root_pos.piece_on(psq);
                             self.update_continuation_histories(ply - 1, pc_on_prev, psq, -2218);
@@ -660,6 +659,9 @@ impl Worker {
         let mut quiets_searched = Vec::with_capacity(SEARCHED_LIST_CAPACITY);
         let mut captures_searched = Vec::with_capacity(SEARCHED_LIST_CAPACITY);
 
+        // Compute correction value once before moves loop (on parent position)
+        let correction_val = self.correction_value(ply);
+
         self.ss_move_counts[ss] = 0;
         if ss + 2 < self.ss_cutoff_cnts.len() {
             self.ss_cutoff_cnts[ss + 2] = 0;
@@ -715,7 +717,14 @@ impl Worker {
             }
 
             // 13c. Capture futility pruning
-            if !ROOT && !gives_check && lmr_depth < 19 && !in_check && capture {
+            if !ROOT
+                && self.root_pos.major_material(us) > 0
+                && !is_loss(best_value)
+                && !gives_check
+                && lmr_depth < 19
+                && !in_check
+                && capture
+            {
                 let capt_hist = self.capture_history.get(
                     moved_piece,
                     m.to_sq(),
@@ -732,7 +741,11 @@ impl Worker {
             }
 
             // 13d. SEE pruning for captures/checks
-            if !ROOT && (capture || gives_check) {
+            if !ROOT
+                && self.root_pos.major_material(us) > 0
+                && !is_loss(best_value)
+                && (capture || gives_check)
+            {
                 let capt_hist = if capture {
                     i32::from(self.capture_history.get(
                         moved_piece,
@@ -749,7 +762,13 @@ impl Worker {
             }
 
             // 13e. Quiet move pruning (only for non-capture, non-check moves)
-            if !ROOT && !capture && !gives_check && (!self.ss_follow_pvs[ss] || !pv_node) {
+            if !ROOT
+                && self.root_pos.major_material(us) > 0
+                && !is_loss(best_value)
+                && !capture
+                && !gives_check
+                && (!self.ss_follow_pvs[ss] || !pv_node)
+            {
                 // Continuation history + pawn history pruning
                 let pawn_key = self.root_pos.pawn_key();
                 let cont_hist_val = self.get_cont_hist_value(ply, moved_piece, m.to_sq());
@@ -765,7 +784,7 @@ impl Worker {
 
                 // History-adjusted lmrDepth
                 let history = history + 73 * i32::from(self.main_history.get(us, m)) / 32;
-                let d_index = (depth as usize).min(15);
+                let d_index = (depth as usize).min(16).saturating_sub(1);
                 let adjusted_lmr_depth = lmr_depth + history / LMR_DIVISOR[d_index];
 
                 // Quiet futility pruning (parent node)
@@ -830,6 +849,7 @@ impl Worker {
                         + i32::from(value < sb - triple_margin);
                     depth += 1;
                 } else if value >= beta && !is_decisive(value) {
+                    self.tt_move_history.update((-397 - 103 * depth).max(-4055));
                     return value;
                 } else if tt_data.value >= beta {
                     extension = -3;
@@ -852,72 +872,64 @@ impl Worker {
 
             let mut value;
 
+            // Compute statScore (after do_move, captures need captured_piece())
+            if capture {
+                self.ss_stat_scores[ss] = 953 * PIECE_VALUE[self.root_pos.captured_piece()] / 128
+                    + i32::from(self.capture_history.get(
+                        moved_piece,
+                        m.to_sq(),
+                        self.root_pos.captured_piece().piece_type(),
+                    ));
+            } else {
+                self.ss_stat_scores[ss] = 2 * i32::from(self.main_history.get(us, m))
+                    + self.get_cont_hist_value(ply, moved_piece, m.to_sq());
+            }
+
+            // All r adjustments (C++ applies these before the LMR/non-LMR branch)
+            let mut r = r;
+
+            if tt_pv {
+                r -= 2363
+                    + i32::from(pv_node) * 963
+                    + i32::from(is_valid(tt_data.value) && tt_data.value > alpha) * 1121
+                    + i32::from(tt_data.depth >= depth) * (1137 + i32::from(cut_node) * 922);
+            }
+            r += 855;
+            r -= move_count * 64;
+            r -= correction_val.abs() / 30558;
+
+            if cut_node {
+                r += 3251 + 1048 * i32::from(!tt_data.tt_move.is_ok());
+            }
+            if tt_capture {
+                r += 1571;
+            }
+
+            if ss + 1 < self.ss_cutoff_cnts.len() && self.ss_cutoff_cnts[ss + 1] > 1 {
+                r += 256
+                    + 1024 * i32::from(self.ss_cutoff_cnts[ss + 1] > 2)
+                    + 1024 * i32::from(all_node);
+            }
+
+            if m == tt_data.tt_move {
+                r -= 2953;
+            }
+
+            r -= self.ss_stat_scores[ss] * 946 / 8192;
+
+            if all_node {
+                r += r * 256 / (256 * depth + 256);
+            }
+
             // LMR
             if depth >= 2 && move_count > 1 {
-                let mut r_adj = r;
-
-                // Phase B: Compute statScore (before LMR adjustments)
-                if capture {
-                    self.ss_stat_scores[ss] = 953 * PIECE_VALUE[self.root_pos.captured_piece()]
-                        / 128
-                        + i32::from(self.capture_history.get(
-                            moved_piece,
-                            m.to_sq(),
-                            self.root_pos.captured_piece().piece_type(),
-                        ));
-                } else {
-                    self.ss_stat_scores[ss] = 2 * i32::from(self.main_history.get(us, m))
-                        + self.get_cont_hist_value(ply, moved_piece, m.to_sq());
-                }
-
-                // Phase C: ttPv reduction with extra terms
-                if tt_pv {
-                    r_adj -= 2363
-                        + i32::from(pv_node) * 963
-                        + i32::from(is_valid(tt_data.value) && tt_data.value > alpha) * 1121
-                        + i32::from(tt_data.depth >= depth) * (1137 + i32::from(cut_node) * 922);
-                }
-                r_adj += 855;
-                r_adj -= move_count * 64;
-
-                if cut_node {
-                    r_adj += 3251 + 1048 * i32::from(!tt_data.tt_move.is_ok());
-                }
-                if tt_capture {
-                    r_adj += 1571;
-                }
-                if m == tt_data.tt_move {
-                    r_adj -= 2953;
-                }
-
-                // Phase C: Use ss_stat_scores instead of local stat variable
-                r_adj -= self.ss_stat_scores[ss] * 946 / 8192;
-
-                // Phase C: correctionValue in LMR
-                let correction_val = self.correction_value(ply);
-                r_adj -= correction_val.abs() / 30558;
-
-                // Phase C: cutoffCnt in LMR
-                if ss + 1 < self.ss_cutoff_cnts.len() && self.ss_cutoff_cnts[ss + 1] > 1 {
-                    r_adj += 256
-                        + 1024 * i32::from(self.ss_cutoff_cnts[ss + 1] > 2)
-                        + 1024 * i32::from(all_node);
-                }
-
-                if all_node {
-                    r_adj += r_adj * 256 / (256 * depth + 256);
-                }
-
-                let d = 1.max((new_depth - r_adj / 1024).min(new_depth + 2)) + i32::from(pv_node);
+                let d = 1.max((new_depth - r / 1024).min(new_depth + 2)) + i32::from(pv_node);
 
                 self.ss_reductions[ss] = new_depth - d;
                 value = -self.ab_search::<false>(ply + 1, -(alpha + 1), -alpha, d, true);
                 self.ss_reductions[ss] = 0;
 
                 if value > alpha {
-                    // Phase C: Post-LMR continuation history update
-                    self.update_continuation_histories(ply, moved_piece, m.to_sq(), 1528);
-
                     let do_deeper = d < new_depth && value > best_value + 60;
                     let do_shallower = value < best_value + 9;
                     new_depth += i32::from(do_deeper) - i32::from(do_shallower);
@@ -931,9 +943,12 @@ impl Worker {
                             !cut_node,
                         );
                     }
+
+                    // Post-LMR continuation history update (after deeper re-search)
+                    self.update_continuation_histories(ply, moved_piece, m.to_sq(), 1528);
                 }
             } else if !pv_node || move_count > 1 {
-                // Phase C: Second-layer reduction for non-LMR full-depth search
+                // Full-depth search when LMR is skipped (uses fully adjusted r)
                 let r_extra = if tt_data.tt_move.is_ok() { 0 } else { 979 };
                 value = -self.ab_search::<false>(
                     ply + 1,
@@ -978,21 +993,21 @@ impl Worker {
                         (value + rm.average_score) / 2
                     };
 
+                    // meanSquaredScore update (unconditional, before alpha check)
+                    rm.mean_squared_score = if rm.mean_squared_score
+                        == -i64::from(VALUE_INFINITE) * i64::from(VALUE_INFINITE)
+                    {
+                        i64::from(value) * i64::from(value.abs())
+                    } else {
+                        (i64::from(value) * i64::from(value.abs()) + rm.mean_squared_score) / 2
+                    };
+
                     if move_count == 1 || value > alpha {
                         rm.score = value;
                         rm.uci_score = value;
                         rm.sel_depth = sel_depth;
                         rm.score_lowerbound = false;
                         rm.score_upperbound = false;
-
-                        // Phase D: meanSquaredScore update
-                        rm.mean_squared_score = if rm.mean_squared_score
-                            == -i64::from(VALUE_INFINITE) * i64::from(VALUE_INFINITE)
-                        {
-                            i64::from(value) * i64::from(value.abs())
-                        } else {
-                            (i64::from(value) * i64::from(value.abs()) + rm.mean_squared_score) / 2
-                        };
 
                         if value >= beta {
                             rm.score_lowerbound = true;
