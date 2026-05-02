@@ -1,12 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use log::{debug, error, info};
 
-use pikarust_core::engine::{Engine, SearchLimits};
+use pikarust_core::engine::{Engine, SearchHandle, SearchLimits};
 use pikarust_core::types::is_decisive;
 use uci_rs::{GoParams, UciCommand, parse_command};
 
@@ -29,109 +28,108 @@ fn main() {
         }
     };
 
-    let searching = Arc::new(AtomicBool::new(false));
-    let stdin = io::stdin();
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<UciCommand>();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                error!("stdin read error: {e}");
-                break;
-            }
-        };
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        debug!(">> {trimmed}");
-
-        let cmd = match parse_command(trimmed) {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("parse error: {e}");
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            let trimmed = line.trim().to_owned();
+            if trimmed.is_empty() {
                 continue;
             }
-        };
-
-        match cmd {
-            UciCommand::Uci => handle_uci(),
-            UciCommand::IsReady => send("readyok"),
-            UciCommand::UciNewGame => {
-                if let Err(e) = engine.new_game() {
-                    error!("new_game failed: {e}");
+            debug!(">> {trimmed}");
+            if let Ok(cmd) = parse_command(&trimmed) {
+                if cmd_tx.send(cmd).is_err() {
+                    break;
                 }
             }
-            UciCommand::Position { fen, moves } => {
-                handle_position(&mut engine, fen.as_deref(), &moves);
+        }
+    });
+
+    let mut active: Option<SearchHandle> = None;
+
+    loop {
+        if let Some(ref handle) = active {
+            if let Some(result) = handle.try_recv() {
+                output_result(&result);
+                active = None;
             }
-            UciCommand::Go(params) => {
-                handle_go(&mut engine, &params, &searching);
-            }
-            UciCommand::Stop => {
-                engine.stop();
-            }
-            UciCommand::SetOption { name, value } => {
-                handle_set_option(&mut engine, &name, value.as_deref());
-            }
-            UciCommand::Quit => {
-                engine.stop();
-                break;
-            }
-            UciCommand::Debug(on) => {
-                debug!("debug mode: {on}");
-            }
-            UciCommand::D => {
-                send(&format!("{}", engine.position()));
-            }
-            UciCommand::PonderHit => {
-                debug!("ponderhit (not yet supported)");
-            }
-            UciCommand::Bench(_params) => {
-                debug!("bench (not yet implemented)");
-            }
-            UciCommand::Flip => {
-                debug!("flip (not yet implemented)");
-            }
+        }
+
+        let timeout = if active.is_some() {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_secs(86400)
+        };
+
+        match cmd_rx.recv_timeout(timeout) {
+            Ok(cmd) => match cmd {
+                UciCommand::Uci => handle_uci(),
+                UciCommand::IsReady => send("readyok"),
+                UciCommand::Go(params) => {
+                    stop_active(&mut active);
+                    let limits = convert_go_params(&params);
+                    active = Some(engine.go(&limits));
+                }
+                UciCommand::Stop => {
+                    if let Some(handle) = active.take() {
+                        handle.stop();
+                        output_result(&handle.wait());
+                    }
+                }
+                UciCommand::PonderHit => {
+                    if let Some(ref handle) = active {
+                        handle.ponderhit();
+                    }
+                }
+                UciCommand::Position { fen, moves } => {
+                    stop_active(&mut active);
+                    handle_position(&mut engine, fen.as_deref(), &moves);
+                }
+                UciCommand::UciNewGame => {
+                    stop_active(&mut active);
+                    if let Err(e) = engine.new_game() {
+                        error!("new_game failed: {e}");
+                    }
+                }
+                UciCommand::SetOption { name, value } => {
+                    stop_active(&mut active);
+                    handle_set_option(&mut engine, &name, value.as_deref());
+                }
+                UciCommand::Quit => {
+                    stop_active(&mut active);
+                    engine.stop();
+                    break;
+                }
+                UciCommand::Debug(on) => {
+                    debug!("debug mode: {on}");
+                }
+                UciCommand::D => {
+                    send(&format!("{}", engine.position()));
+                }
+                UciCommand::Bench(_params) => {
+                    debug!("bench (not yet implemented)");
+                }
+                UciCommand::Flip => {
+                    debug!("flip (not yet implemented)");
+                }
+            },
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     info!("{ENGINE_NAME} exiting");
 }
 
-fn handle_uci() {
-    send(&format!("id name {ENGINE_NAME}"));
-    send(&format!("id author {ENGINE_AUTHOR}"));
-
-    for opt in Engine::uci_options() {
-        send(&opt.to_string());
-    }
-
-    send("uciok");
-}
-
-fn handle_position(engine: &mut Engine, fen: Option<&str>, moves: &[String]) {
-    let fen = fen.unwrap_or(START_FEN);
-    let move_strs: Vec<&str> = moves.iter().map(String::as_str).collect();
-
-    if let Err(e) = engine.set_position(fen, &move_strs) {
-        error!("position error: {e}");
+fn stop_active(active: &mut Option<SearchHandle>) {
+    if let Some(handle) = active.take() {
+        handle.stop();
+        let _ = handle.wait();
     }
 }
 
-fn handle_go(engine: &mut Engine, params: &GoParams, searching: &Arc<AtomicBool>) {
-    if searching.load(Ordering::SeqCst) {
-        engine.stop();
-    }
-
-    let limits = convert_go_params(params);
-    searching.store(true, Ordering::SeqCst);
-
-    let result = engine.go(&limits);
-    searching.store(false, Ordering::SeqCst);
-
+fn output_result(result: &pikarust_core::engine::SearchResult) {
     let score_str = if is_decisive(result.score) {
         let plies = if result.score > 0 {
             pikarust_core::types::VALUE_MATE - result.score
@@ -155,12 +153,29 @@ fn handle_go(engine: &mut Engine, params: &GoParams, searching: &Arc<AtomicBool>
     send(&info);
 
     let best = result.best_move.to_string();
-    let ponder = result.ponder_move.map(|m| m.to_string());
+    match result.ponder_move {
+        Some(p) => send(&format!("bestmove {best} ponder {p}")),
+        None => send(&format!("bestmove {best}")),
+    }
+}
 
-    if let Some(p) = &ponder {
-        send(&format!("bestmove {best} ponder {p}"));
-    } else {
-        send(&format!("bestmove {best}"));
+fn handle_uci() {
+    send(&format!("id name {ENGINE_NAME}"));
+    send(&format!("id author {ENGINE_AUTHOR}"));
+
+    for opt in Engine::uci_options() {
+        send(&opt.to_string());
+    }
+
+    send("uciok");
+}
+
+fn handle_position(engine: &mut Engine, fen: Option<&str>, moves: &[String]) {
+    let fen = fen.unwrap_or(START_FEN);
+    let move_strs: Vec<&str> = moves.iter().map(String::as_str).collect();
+
+    if let Err(e) = engine.set_position(fen, &move_strs) {
+        error!("position error: {e}");
     }
 }
 

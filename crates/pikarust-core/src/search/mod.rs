@@ -15,6 +15,6 @@ pub mod tt;
 
 pub use score::{to_cp, wdl};
 pub use search::{PVLine, RootMove, Worker};
-pub use thread::ThreadPool;
+pub use thread::{SearchResult as ThreadSearchResult, ThreadPool};
 pub use time::SearchLimits;
 pub use tt::TranspositionTable;

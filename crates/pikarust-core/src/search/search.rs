@@ -112,6 +112,7 @@ pub struct Worker {
     pub reductions: [i32; MAX_PLY as usize + 10],
 
     pub stop: Arc<AtomicBool>,
+    pub ponder: Arc<AtomicBool>,
     pub tt: Arc<TranspositionTable>,
     pub increase_depth: Arc<AtomicBool>,
     pub tot_best_move_changes: Arc<AtomicU64>,
@@ -145,9 +146,11 @@ pub struct Worker {
 }
 
 impl Worker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         thread_idx: usize,
         stop: Arc<AtomicBool>,
+        ponder: Arc<AtomicBool>,
         tt: Arc<TranspositionTable>,
         increase_depth: Arc<AtomicBool>,
         tot_best_move_changes: Arc<AtomicU64>,
@@ -184,6 +187,7 @@ impl Worker {
             reductions: [0; MAX_PLY as usize + 10],
 
             stop,
+            ponder,
             tt,
             increase_depth,
             tot_best_move_changes,
@@ -421,7 +425,7 @@ impl Worker {
 
         let elapsed = self.tm.elapsed();
 
-        if self.limits.ponder_mode {
+        if self.ponder.load(Ordering::Relaxed) {
             return;
         }
 

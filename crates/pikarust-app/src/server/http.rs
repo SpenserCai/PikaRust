@@ -102,7 +102,7 @@ async fn evaluate_handler(
     };
 
     let (engine, search_result) = tokio::task::spawn_blocking(move || {
-        let r = engine.go(&limits);
+        let r = engine.go(&limits).wait();
         (engine, r)
     })
     .await
@@ -137,7 +137,7 @@ async fn bestmove_handler(
     };
 
     let (engine, search_result) = tokio::task::spawn_blocking(move || {
-        let r = engine.go(&limits);
+        let r = engine.go(&limits).wait();
         (engine, r)
     })
     .await

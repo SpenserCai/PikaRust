@@ -19,7 +19,7 @@ fn bench_search_depth1(c: &mut Criterion) {
                 depth: Some(1),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits))
+            criterion::black_box(engine.go(&limits).wait())
         });
     });
 }
@@ -35,7 +35,7 @@ fn bench_search_depth2(c: &mut Criterion) {
                 depth: Some(2),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits))
+            criterion::black_box(engine.go(&limits).wait())
         });
     });
 }
@@ -53,7 +53,7 @@ fn bench_search_depth3(c: &mut Criterion) {
                 depth: Some(3),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits))
+            criterion::black_box(engine.go(&limits).wait())
         });
     });
     group.finish();

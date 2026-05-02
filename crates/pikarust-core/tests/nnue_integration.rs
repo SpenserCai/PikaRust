@@ -358,11 +358,61 @@ fn test_search_finds_move_at_depth() {
         depth: Some(5),
         ..SearchLimits::default()
     };
-    let result = engine.go(&limits);
+    let result = engine.go(&limits).wait();
     assert_ne!(
         result.best_move,
         Move::NONE,
         "search should find a move at depth 5"
     );
     assert!(result.depth >= 5, "should reach depth 5");
+}
+
+// ---------------------------------------------------------------
+// SearchHandle integration tests
+// ---------------------------------------------------------------
+
+#[test]
+fn test_search_handle_stop_during_search() {
+    use pikarust_core::engine::{Engine, SearchLimits};
+    use pikarust_core::types::Move;
+
+    let mut engine = Engine::new().expect("engine init");
+    let limits = SearchLimits {
+        depth: Some(100),
+        ..SearchLimits::default()
+    };
+    let handle = engine.go(&limits);
+    handle.stop();
+    let result = handle.wait();
+    assert_ne!(
+        result.best_move,
+        Move::NONE,
+        "stopped search should return a move"
+    );
+}
+
+#[test]
+fn test_search_ponder_protocol_compliance() {
+    use pikarust_core::engine::{Engine, SearchLimits};
+    use pikarust_core::types::Move;
+
+    let mut engine = Engine::new().expect("engine init");
+    let limits = SearchLimits {
+        depth: Some(1),
+        ponder: true,
+        ..SearchLimits::default()
+    };
+    let handle = engine.go(&limits);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        handle.try_recv().is_none(),
+        "ponder search should not complete without stop/ponderhit"
+    );
+    handle.ponderhit();
+    let result = handle.wait();
+    assert_ne!(
+        result.best_move,
+        Move::NONE,
+        "ponderhit should allow completion"
+    );
 }

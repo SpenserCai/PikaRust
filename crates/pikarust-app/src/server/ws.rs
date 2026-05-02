@@ -155,7 +155,7 @@ async fn handle_go(session: &Session, cmd: &WsCommand, tx: &mpsc::Sender<String>
     let Some(engine) = guard.as_mut() else {
         return;
     };
-    let result = engine.go(&limits);
+    let result = engine.go(&limits).wait();
     drop(guard);
 
     let resp = serde_json::to_string(&WsResponse::BestMove {

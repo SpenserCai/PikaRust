@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use log::info;
@@ -8,6 +10,7 @@ use thiserror::Error;
 use crate::nnue::{Network, NnueModel};
 use crate::position::{FenError, Position};
 use crate::search::ThreadPool;
+use crate::search::thread::SearchResult as ThreadSearchResult;
 use crate::search::time::SearchLimits as InternalSearchLimits;
 use crate::types::{Depth, Move, Square, VALUE_ZERO, Value, is_decisive};
 
@@ -161,55 +164,33 @@ impl Engine {
         &self.position
     }
 
-    pub fn go(&mut self, limits: &SearchLimits) -> SearchResult {
+    pub fn go(&mut self, limits: &SearchLimits) -> SearchHandle {
         self.ensure_thread_pool();
+        let piece_counts = *self.position.piece_count_array();
+        let show_wdl = self.options.show_wdl;
         let Some(tp) = self.thread_pool.as_mut() else {
-            return SearchResult::default();
+            let (tx, rx) = mpsc::sync_channel(1);
+            let _ = tx.send(ThreadSearchResult::default());
+            return SearchHandle {
+                stop: Arc::new(AtomicBool::new(true)),
+                ponder: Arc::new(AtomicBool::new(false)),
+                rx,
+                piece_counts,
+                show_wdl,
+            };
         };
 
         let search_limits = convert_limits(limits);
-        tp.start_search(&self.position, &search_limits);
-        tp.wait_for_search();
+        let stop = Arc::clone(tp.stop_flag());
+        let ponder = Arc::clone(tp.ponder_flag());
+        let rx = tp.start_search_async(&self.position, &search_limits);
 
-        let best_move = tp.best_move().unwrap_or(Move::NONE);
-        let score = tp.best_score();
-        let nodes = tp.nodes_searched();
-
-        let idx = tp.best_thread_idx();
-        let depth = tp.worker(idx).completed_depth;
-
-        let ponder_move = if best_move == Move::NONE {
-            None
-        } else {
-            let w = tp.worker(idx);
-            if !w.root_moves.is_empty() && w.root_moves[0].pv.len() > 1 {
-                Some(w.root_moves[0].pv[1])
-            } else {
-                None
-            }
-        };
-
-        let piece_counts = self.position.piece_count_array();
-        let (score_cp, wdl) = if is_decisive(score) {
-            (score, None)
-        } else {
-            let cp = crate::search::to_cp(score, piece_counts);
-            let wdl_triple = if self.options.show_wdl {
-                Some(crate::search::wdl(score, piece_counts))
-            } else {
-                None
-            };
-            (cp, wdl_triple)
-        };
-
-        SearchResult {
-            best_move,
-            ponder_move,
-            score,
-            score_cp,
-            wdl,
-            depth,
-            nodes,
+        SearchHandle {
+            stop,
+            ponder,
+            rx,
+            piece_counts,
+            show_wdl,
         }
     }
 
@@ -221,6 +202,65 @@ impl Engine {
 
     pub fn uci_options() -> Vec<UciOption> {
         EngineOptions::uci_options()
+    }
+}
+
+/// Search control handle. Holds the stop signal and result receiver.
+/// Similar to `std::thread::JoinHandle` — the caller controls the search
+/// lifecycle through this handle.
+pub struct SearchHandle {
+    stop: Arc<AtomicBool>,
+    ponder: Arc<AtomicBool>,
+    rx: mpsc::Receiver<ThreadSearchResult>,
+    piece_counts: [u8; 16],
+    show_wdl: bool,
+}
+
+impl SearchHandle {
+    /// Block until the search completes, consuming the handle.
+    pub fn wait(self) -> SearchResult {
+        let raw = self.rx.recv().unwrap_or_default();
+        self.finalize(&raw)
+    }
+
+    /// Non-blocking check for search completion.
+    pub fn try_recv(&self) -> Option<SearchResult> {
+        self.rx.try_recv().ok().map(|raw| self.finalize(&raw))
+    }
+
+    /// Send stop signal. The search threads will stop at the next checkpoint.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Ponderhit: transition from ponder mode to normal search.
+    /// Time management starts taking effect.
+    pub fn ponderhit(&self) {
+        self.ponder.store(false, Ordering::SeqCst);
+    }
+
+    fn finalize(&self, raw: &ThreadSearchResult) -> SearchResult {
+        let (score_cp, wdl) = if is_decisive(raw.score) {
+            (raw.score, None)
+        } else {
+            let cp = crate::search::to_cp(raw.score, &self.piece_counts);
+            let wdl_triple = if self.show_wdl {
+                Some(crate::search::wdl(raw.score, &self.piece_counts))
+            } else {
+                None
+            };
+            (cp, wdl_triple)
+        };
+
+        SearchResult {
+            best_move: raw.best_move,
+            ponder_move: raw.ponder_move,
+            score: raw.score,
+            score_cp,
+            wdl,
+            depth: raw.depth,
+            nodes: raw.nodes,
+        }
     }
 }
 
@@ -353,7 +393,7 @@ mod tests {
             depth: Some(1),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
         assert!(result.depth >= 1);
     }
@@ -463,7 +503,7 @@ mod tests {
             depth: Some(1),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE, "depth 1 should return a move");
         assert!(result.best_move.is_ok(), "returned move should be valid");
 
@@ -482,7 +522,7 @@ mod tests {
             depth: Some(3),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
         assert!(result.depth >= 3, "should reach at least depth 3");
         assert!(result.nodes > 0, "should search some nodes");
@@ -499,7 +539,7 @@ mod tests {
             depth: Some(5),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
         assert!(result.depth >= 5);
         assert!(result.nodes > 100, "depth 5 should search many nodes");
@@ -515,7 +555,7 @@ mod tests {
             depth: Some(3),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
         assert!(result.best_move.is_ok());
     }
@@ -529,7 +569,7 @@ mod tests {
             depth: Some(3),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
     }
 
@@ -540,7 +580,7 @@ mod tests {
             nodes: Some(1000),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
         // Node limit is approximate, but should be in the right ballpark
         assert!(
@@ -559,11 +599,11 @@ mod tests {
         };
 
         // First search
-        let r1 = engine.go(&limits);
+        let r1 = engine.go(&limits).wait();
         assert_ne!(r1.best_move, Move::NONE);
 
         // Second search on same position should also work
-        let r2 = engine.go(&limits);
+        let r2 = engine.go(&limits).wait();
         assert_ne!(r2.best_move, Move::NONE);
     }
 
@@ -576,11 +616,11 @@ mod tests {
             depth: Some(2),
             ..SearchLimits::default()
         };
-        let _ = engine.go(&limits);
+        let _ = engine.go(&limits).wait();
 
         // New game, then search again
         engine.new_game().unwrap();
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
     }
 
@@ -594,7 +634,7 @@ mod tests {
             depth: Some(3),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         assert_ne!(result.best_move, Move::NONE);
     }
 
@@ -605,7 +645,7 @@ mod tests {
             depth: Some(5),
             ..SearchLimits::default()
         };
-        let result = engine.go(&limits);
+        let result = engine.go(&limits).wait();
         // Score should be within valid range
         assert!(
             result.score > VALUE_MATED_IN_MAX_PLY - 100
@@ -613,5 +653,160 @@ mod tests {
             "score {} should be in reasonable range",
             result.score
         );
+    }
+
+    // -------------------------------------------------------------------
+    // SearchHandle tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_search_handle_stop_terminates_search() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(100),
+            ..SearchLimits::default()
+        };
+        let handle = engine.go(&limits);
+        handle.stop();
+        let result = handle.wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_handle_try_recv_none_during_search() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(100),
+            ..SearchLimits::default()
+        };
+        let handle = engine.go(&limits);
+        let immediate = handle.try_recv();
+        assert!(
+            immediate.is_none(),
+            "deep search should not complete instantly"
+        );
+        handle.stop();
+        let _ = handle.wait();
+    }
+
+    #[test]
+    fn test_search_handle_wait_after_completion() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(1),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits).wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_handle_ponder_waits_for_stop() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(1),
+            ponder: true,
+            ..SearchLimits::default()
+        };
+        let handle = engine.go(&limits);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let poll = handle.try_recv();
+        assert!(poll.is_none(), "ponder search should not return until stop");
+        handle.stop();
+        let result = handle.wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_handle_ponderhit_transitions_to_normal() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(1),
+            ponder: true,
+            ..SearchLimits::default()
+        };
+        let handle = engine.go(&limits);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        handle.ponderhit();
+        let result = handle.wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_handle_infinite_waits_for_stop() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            infinite: true,
+            ..SearchLimits::default()
+        };
+        let handle = engine.go(&limits);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let poll = handle.try_recv();
+        assert!(
+            poll.is_none(),
+            "infinite search should not return until stop"
+        );
+        handle.stop();
+        let result = handle.wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_thread_pool_drop_stops_active_search() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(100),
+            ..SearchLimits::default()
+        };
+        let _handle = engine.go(&limits);
+        drop(engine);
+    }
+
+    #[test]
+    fn test_consecutive_go_stops_previous() {
+        let mut engine = Engine::new().unwrap();
+        let limits1 = SearchLimits {
+            depth: Some(100),
+            ..SearchLimits::default()
+        };
+        let _handle1 = engine.go(&limits1);
+
+        let limits2 = SearchLimits {
+            depth: Some(1),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits2).wait();
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_worker_recovery_after_search() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(3),
+            ..SearchLimits::default()
+        };
+        let r1 = engine.go(&limits).wait();
+        assert_ne!(r1.best_move, Move::NONE);
+
+        let r2 = engine.go(&limits).wait();
+        assert_ne!(r2.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_handle_no_legal_moves() {
+        let mut engine = Engine::new().unwrap();
+        let fen = "3k5/9/3R5/4R4/9/9/9/9/9/4K4 b - - 0 1";
+        if engine.set_position(fen, &[]).is_ok() {
+            let limits = SearchLimits {
+                depth: Some(1),
+                ..SearchLimits::default()
+            };
+            let result = engine.go(&limits).wait();
+            assert!(
+                result.best_move == Move::NONE || result.best_move.is_ok(),
+                "should return NONE or a valid move"
+            );
+        }
     }
 }

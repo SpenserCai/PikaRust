@@ -60,7 +60,7 @@ fn bench_nps() {
     };
 
     let start = Instant::now();
-    let result = engine.go(&limits);
+    let result = engine.go(&limits).wait();
     let elapsed = start.elapsed();
 
     let nps = if elapsed.as_secs_f64() > 0.0 {

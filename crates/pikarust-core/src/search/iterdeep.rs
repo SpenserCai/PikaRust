@@ -186,14 +186,14 @@ impl Worker {
 
                 // Stop the search if we have exceeded the totalTime or maximum
                 if elapsed > total_time.min(self.tm.maximum() as f64) {
-                    if self.limits.ponder_mode {
+                    if self.ponder.load(Ordering::Relaxed) {
                         self.stop_on_ponderhit = true;
                     } else {
                         self.stop.store(true, Ordering::Relaxed);
                     }
                 } else {
                     self.increase_depth.store(
-                        self.limits.ponder_mode || elapsed <= total_time * 0.26,
+                        self.ponder.load(Ordering::Relaxed) || elapsed <= total_time * 0.26,
                         Ordering::Relaxed,
                     );
                 }
@@ -201,6 +201,15 @@ impl Worker {
 
             self.iter_value[iter_idx] = best_value;
             iter_idx = (iter_idx + 1) & 3;
+        }
+
+        if is_main {
+            while !self.stop.load(Ordering::Relaxed)
+                && (self.ponder.load(Ordering::Relaxed) || self.limits.infinite)
+            {
+                std::thread::park_timeout(std::time::Duration::from_millis(1));
+            }
+            self.stop.store(true, Ordering::Relaxed);
         }
 
         if is_main {
