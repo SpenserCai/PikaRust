@@ -6,10 +6,8 @@ pub mod features;
 pub mod layers;
 mod model;
 mod network;
-#[cfg(test)]
-mod regression_tests;
 pub mod simd;
 
 pub use accumulator::{Accumulator, AccumulatorStack, DiffType, DirtyPiece};
-pub use model::NnueModel;
-pub use network::Network;
+pub use model::{NnueModel, L2_BIG, WEIGHT_SCALE_BITS};
+pub use network::{Network, make_layer_stack_bucket};

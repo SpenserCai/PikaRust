@@ -96,6 +96,11 @@ impl Position {
     }
 
     #[inline]
+    pub const fn piece_count_array(&self) -> &[u8; Piece::NUM] {
+        &self.piece_count
+    }
+
+    #[inline]
     pub fn count_type(&self, c: Color, pt: PieceType) -> u8 {
         self.piece_count[Piece::make(c, pt)]
     }
