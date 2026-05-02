@@ -9,5 +9,5 @@ mod network;
 pub mod simd;
 
 pub use accumulator::{Accumulator, AccumulatorStack, DiffType, DirtyPiece};
-pub use model::{NnueModel, L2_BIG, WEIGHT_SCALE_BITS};
+pub use model::{L2_BIG, NnueModel, WEIGHT_SCALE_BITS};
 pub use network::{Network, make_layer_stack_bucket};

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use log::{debug, error, info};
 
 use pikarust_core::engine::{Engine, SearchLimits};
+use pikarust_core::types::is_decisive;
 use uci_rs::{GoParams, UciCommand, parse_command};
 
 const ENGINE_NAME: &str = "PikaRust";
@@ -130,6 +131,28 @@ fn handle_go(engine: &mut Engine, params: &GoParams, searching: &Arc<AtomicBool>
 
     let result = engine.go(&limits);
     searching.store(false, Ordering::SeqCst);
+
+    let score_str = if is_decisive(result.score) {
+        let plies = if result.score > 0 {
+            pikarust_core::types::VALUE_MATE - result.score
+        } else {
+            -(pikarust_core::types::VALUE_MATE + result.score)
+        };
+        let moves = (plies + i32::from(plies > 0)) / 2;
+        format!("score mate {moves}")
+    } else {
+        format!("score cp {}", result.score_cp)
+    };
+
+    let mut info = format!(
+        "info depth {} nodes {} {score_str}",
+        result.depth, result.nodes
+    );
+    if let Some((w, d, l)) = result.wdl {
+        use std::fmt::Write;
+        let _ = write!(info, " wdl {w} {d} {l}");
+    }
+    send(&info);
 
     let best = result.best_move.to_string();
     let ponder = result.ponder_move.map(|m| m.to_string());

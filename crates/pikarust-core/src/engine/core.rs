@@ -9,7 +9,7 @@ use crate::nnue::{Network, NnueModel};
 use crate::position::{FenError, Position};
 use crate::search::ThreadPool;
 use crate::search::time::SearchLimits as InternalSearchLimits;
-use crate::types::{Depth, Move, Square, VALUE_ZERO, Value};
+use crate::types::{Depth, Move, Square, VALUE_ZERO, Value, is_decisive};
 
 use super::options::{EngineOptions, OptionError, UciOption};
 
@@ -42,6 +42,8 @@ pub struct SearchResult {
     pub best_move: Move,
     pub ponder_move: Option<Move>,
     pub score: Value,
+    pub score_cp: i32,
+    pub wdl: Option<(i32, i32, i32)>,
     pub depth: Depth,
     pub nodes: u64,
 }
@@ -52,6 +54,8 @@ impl Default for SearchResult {
             best_move: Move::NONE,
             ponder_move: None,
             score: VALUE_ZERO,
+            score_cp: 0,
+            wdl: None,
             depth: 0,
             nodes: 0,
         }
@@ -185,10 +189,25 @@ impl Engine {
             }
         };
 
+        let piece_counts = self.position.piece_count_array();
+        let (score_cp, wdl) = if is_decisive(score) {
+            (score, None)
+        } else {
+            let cp = crate::search::to_cp(score, piece_counts);
+            let wdl_triple = if self.options.show_wdl {
+                Some(crate::search::wdl(score, piece_counts))
+            } else {
+                None
+            };
+            (cp, wdl_triple)
+        };
+
         SearchResult {
             best_move,
             ponder_move,
             score,
+            score_cp,
+            wdl,
             depth,
             nodes,
         }

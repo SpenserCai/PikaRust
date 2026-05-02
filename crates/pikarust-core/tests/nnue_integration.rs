@@ -1,7 +1,9 @@
-use pikarust_core::nnue::feature_transformer::{refresh_psq_accumulator, refresh_threat_accumulator};
-use pikarust_core::nnue::simd::scalar::Scalar;
+use pikarust_core::nnue::feature_transformer::{
+    refresh_psq_accumulator, refresh_threat_accumulator,
+};
 use pikarust_core::nnue::simd::SimdOps;
-use pikarust_core::nnue::{Accumulator, NnueModel, Network};
+use pikarust_core::nnue::simd::scalar::Scalar;
+use pikarust_core::nnue::{Accumulator, Network, NnueModel};
 use pikarust_core::position::Position;
 
 fn load_network() -> Option<Network> {
@@ -245,8 +247,8 @@ fn test_affine_propagate_fc0_size_matches_scalar() {
 
 #[test]
 fn test_affine_propagate_with_real_model_weights() {
-    use pikarust_core::nnue::{L2_BIG, WEIGHT_SCALE_BITS};
     use pikarust_core::nnue::simd::{Dispatch, SimdBackend};
+    use pikarust_core::nnue::{L2_BIG, WEIGHT_SCALE_BITS};
     use pikarust_core::types::Color;
 
     let Some(net) = load_network() else {

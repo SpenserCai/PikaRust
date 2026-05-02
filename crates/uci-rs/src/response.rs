@@ -31,6 +31,7 @@ pub struct InfoParams {
     pub nodes: Option<u64>,
     pub pv: Option<Vec<String>>,
     pub score: Option<Score>,
+    pub wdl: Option<(i32, i32, i32)>,
     pub currmove: Option<String>,
     pub currmovenumber: Option<u32>,
     pub hashfull: Option<u32>,
@@ -149,6 +150,9 @@ impl fmt::Display for UciResponse {
                 }
                 if let Some(score) = &params.score {
                     write!(f, " {score}")?;
+                }
+                if let Some((w, d, l)) = params.wdl {
+                    write!(f, " wdl {w} {d} {l}")?;
                 }
                 if let Some(cm) = &params.currmove {
                     write!(f, " currmove {cm}")?;
