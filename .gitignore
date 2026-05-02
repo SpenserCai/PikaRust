@@ -57,3 +57,6 @@ CLAUDE.md
 .cargo/
 
 dev_docs/
+
+# ===== E2E Platform =====
+e2e_platform/target/
