@@ -30,6 +30,7 @@ impl Not for Color {
     type Output = Self;
 
     #[inline]
+    #[allow(unsafe_code)]
     fn not(self) -> Self {
         // SAFETY: `self as u8` is 0 or 1, XOR with 1 yields 1 or 0.
         unsafe { std::mem::transmute(self as u8 ^ 1) }

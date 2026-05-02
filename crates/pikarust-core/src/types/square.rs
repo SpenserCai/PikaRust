@@ -46,6 +46,7 @@ impl TryFrom<u8> for File {
     type Error = SquareError;
 
     #[inline]
+    #[allow(unsafe_code)]
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         if v < 9 {
             // SAFETY: v is in 0..=8, matching all enum variants.
@@ -108,6 +109,7 @@ impl TryFrom<u8> for Rank {
     type Error = SquareError;
 
     #[inline]
+    #[allow(unsafe_code)]
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         if v < 10 {
             // SAFETY: v is in 0..=9, matching all enum variants.
@@ -197,12 +199,14 @@ impl Square {
     }
 
     #[inline]
+    #[allow(unsafe_code)]
     pub const fn file(self) -> File {
         // SAFETY: self.0 % 9 is always in 0..=8.
         unsafe { std::mem::transmute(self.0 % 9) }
     }
 
     #[inline]
+    #[allow(unsafe_code)]
     pub const fn rank(self) -> Rank {
         // SAFETY: for valid squares (0..89), self.0 / 9 is in 0..=9.
         unsafe { std::mem::transmute(self.0 / 9) }
@@ -211,14 +215,18 @@ impl Square {
     /// Vertical flip (swap rank 0 <-> rank 9).
     #[inline]
     #[must_use]
+    #[allow(unsafe_code)]
     pub const fn flip_rank(self) -> Self {
+        // SAFETY: for valid squares, 9 - self.0 / 9 is in 0..=9, valid for Rank.
         Self::make(self.file(), unsafe { std::mem::transmute(9 - self.0 / 9) })
     }
 
     /// Horizontal flip (swap file A <-> file I).
     #[inline]
     #[must_use]
+    #[allow(unsafe_code)]
     pub const fn flip_file(self) -> Self {
+        // SAFETY: for valid squares, 8 - self.0 % 9 is in 0..=8, valid for File.
         Self::make(unsafe { std::mem::transmute(8 - self.0 % 9) }, self.rank())
     }
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::nnue::{Accumulator, Network};
 use crate::position::Position;
 use crate::types::{
     Color, Depth, MAX_PLY, Move, VALUE_DRAW, VALUE_INFINITE, VALUE_MATE_IN_MAX_PLY,
@@ -111,6 +112,8 @@ pub struct Worker {
     pub tt: Arc<TranspositionTable>,
     pub increase_depth: Arc<AtomicBool>,
 
+    pub network: Option<Arc<Network>>,
+
     pub tm: TimeManager,
     pub best_previous_score: Value,
     pub best_previous_avg_score: Value,
@@ -138,6 +141,7 @@ impl Worker {
         stop: Arc<AtomicBool>,
         tt: Arc<TranspositionTable>,
         increase_depth: Arc<AtomicBool>,
+        network: Option<Arc<Network>>,
     ) -> Self {
         let ss_size = MAX_PLY as usize + 10;
         let mut w = Self {
@@ -169,6 +173,8 @@ impl Worker {
             stop,
             tt,
             increase_depth,
+
+            network,
 
             tm: TimeManager::new(),
             best_previous_score: VALUE_INFINITE,
@@ -239,9 +245,32 @@ impl Worker {
     }
 
     pub fn evaluate_pos(&self) -> Value {
-        evaluate::evaluate_simple(
-            &self.root_pos,
-            self.optimism[self.root_pos.side_to_move().index()],
+        let optimism = self.optimism[self.root_pos.side_to_move().index()];
+        self.network.as_ref().map_or_else(
+            || evaluate::evaluate_simple(&self.root_pos, optimism),
+            |net| {
+                let mut psq_acc = Accumulator::new();
+                let mut threat_acc = Accumulator::new();
+                crate::nnue::feature_transformer::refresh_psq_accumulator(
+                    net.model(),
+                    &self.root_pos,
+                    &mut psq_acc,
+                );
+                crate::nnue::feature_transformer::refresh_threat_accumulator(
+                    net.model(),
+                    &self.root_pos,
+                    &mut threat_acc,
+                );
+                let (nnue_psqt, nnue_positional) = net.evaluate(
+                    &psq_acc.accumulation,
+                    &threat_acc.accumulation,
+                    &psq_acc.psqt_accumulation,
+                    &threat_acc.psqt_accumulation,
+                    &self.root_pos.piece_count,
+                    self.root_pos.side_to_move(),
+                );
+                evaluate::evaluate(&self.root_pos, nnue_psqt, nnue_positional, optimism)
+            },
         )
     }
 

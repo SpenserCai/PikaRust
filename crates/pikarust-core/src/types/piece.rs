@@ -48,6 +48,7 @@ impl TryFrom<u8> for PieceType {
     type Error = PieceTypeError;
 
     #[inline]
+    #[allow(unsafe_code)]
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         if (1..=7).contains(&v) {
             // SAFETY: v is in 1..=7, matching all enum variants.
@@ -112,6 +113,7 @@ impl Piece {
     }
 
     #[inline]
+    #[allow(unsafe_code)]
     pub const fn color(self) -> Color {
         debug_assert!(self.0 != 0, "called color() on Piece::NONE");
         // SAFETY: bit 3 is 0 or 1 for valid pieces.
@@ -119,6 +121,7 @@ impl Piece {
     }
 
     #[inline]
+    #[allow(unsafe_code)]
     pub const fn piece_type(self) -> PieceType {
         debug_assert!(self.0 != 0, "called piece_type() on Piece::NONE");
         // SAFETY: low 3 bits of a valid piece are 1..=7.

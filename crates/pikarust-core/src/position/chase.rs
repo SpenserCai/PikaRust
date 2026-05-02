@@ -15,7 +15,6 @@ struct PositionSnapshot {
     side_to_move: Color,
     game_ply: u16,
     state: StateInfo,
-    state_stack_len: usize,
 }
 
 impl Position {
@@ -28,10 +27,10 @@ impl Position {
             side_to_move: self.side_to_move,
             game_ply: self.game_ply,
             state: self.state.clone(),
-            state_stack_len: self.state_stack.len(),
         }
     }
 
+    #[allow(clippy::missing_const_for_fn)]
     fn restore_snapshot(&mut self, snap: PositionSnapshot) {
         self.board = snap.board;
         self.by_type_bb = snap.by_type_bb;
@@ -40,7 +39,6 @@ impl Position {
         self.side_to_move = snap.side_to_move;
         self.game_ply = snap.game_ply;
         self.state = snap.state;
-        self.state_stack.truncate(snap.state_stack_len);
     }
 
     fn attacks_bb_by_type(&self, pt: PieceType, sq: Square) -> Bitboard {
@@ -117,6 +115,7 @@ impl Position {
 
                 let mut true_chase = true;
                 let (captured, id) = self.do_move_for_chase(m);
+                self.debug_check_consistency("after_do_move_for_chase");
                 let mut recaptures =
                     self.attackers_to_simple(to) & self.pieces_by_color(self.side_to_move);
                 while recaptures.is_not_empty() {
@@ -127,6 +126,7 @@ impl Position {
                     }
                 }
                 self.undo_move_for_chase(m, captured, id);
+                self.debug_check_consistency("after_undo_move_for_chase");
 
                 if true_chase {
                     if attacker_type == target_type {
@@ -171,7 +171,8 @@ impl Position {
 
         let mut chase = [0xFFFFu16; Color::NUM];
 
-        let result = self.detect_chases_inner(d, ply, us, them, &mut chase);
+        let mut stack_cursor = self.state_stack.len();
+        let result = self.detect_chases_inner(d, ply, us, them, &mut chase, &mut stack_cursor);
 
         self.restore_snapshot(snap);
 
@@ -185,6 +186,7 @@ impl Position {
         us: Color,
         them: Color,
         chase: &mut [u16; Color::NUM],
+        stack_cursor: &mut usize,
     ) -> Value {
         for _i in 0..d {
             if self.state.checkers_bb.is_not_empty() {
@@ -197,10 +199,10 @@ impl Position {
                 if chase[self.side_to_move] == 0 {
                     break;
                 }
-                self.undo_move_light();
+                self.undo_move_light(stack_cursor);
             } else {
                 let after = self.chased(stm_opponent);
-                self.undo_move_light();
+                self.undo_move_light(stack_cursor);
                 let before = self.chased(self.side_to_move);
                 chase[self.side_to_move] &= after & !before;
             }
@@ -220,7 +222,7 @@ impl Position {
         }
     }
 
-    fn undo_move_light(&mut self) {
+    fn undo_move_light(&mut self, stack_cursor: &mut usize) {
         let m = self.state.last_move;
         let captured = self.state.captured_piece;
 
@@ -235,8 +237,9 @@ impl Position {
             self.put_piece(captured, to);
         }
 
-        if let Some(prev_state) = self.state_stack.pop() {
-            self.state = prev_state;
+        if *stack_cursor > 0 {
+            *stack_cursor -= 1;
+            self.state = self.state_stack[*stack_cursor].clone();
         }
         self.game_ply = self.game_ply.saturating_sub(1);
     }

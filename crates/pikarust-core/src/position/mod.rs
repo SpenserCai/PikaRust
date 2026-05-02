@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod chase;
 mod do_move;
 mod fen;

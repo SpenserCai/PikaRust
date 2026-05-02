@@ -1,11 +1,15 @@
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
+use log::info;
 use thiserror::Error;
 
+use crate::nnue::{Network, NnueModel};
 use crate::position::{FenError, Position};
 use crate::search::ThreadPool;
 use crate::search::time::SearchLimits as InternalSearchLimits;
-use crate::types::{Depth, Move, Square, Value};
+use crate::types::{Depth, Move, Square, VALUE_ZERO, Value};
 
 use super::options::{EngineOptions, OptionError, UciOption};
 
@@ -42,25 +46,67 @@ pub struct SearchResult {
     pub nodes: u64,
 }
 
+impl Default for SearchResult {
+    fn default() -> Self {
+        Self {
+            best_move: Move::NONE,
+            ponder_move: None,
+            score: VALUE_ZERO,
+            depth: 0,
+            nodes: 0,
+        }
+    }
+}
+
 pub struct Engine {
     options: EngineOptions,
     position: Position,
     thread_pool: Option<ThreadPool>,
+    network: Option<Arc<Network>>,
+}
+
+const DEFAULT_NNUE_FILE: &str = "pikafish.nnue";
+
+const NNUE_SEARCH_PATHS: &[&str] = &["models", "."];
+
+fn find_nnue_model() -> Option<Arc<Network>> {
+    for dir in NNUE_SEARCH_PATHS {
+        let path = Path::new(dir).join(DEFAULT_NNUE_FILE);
+        if path.exists() {
+            match NnueModel::load(&path) {
+                Ok(model) => {
+                    info!("NNUE model loaded from {}", path.display());
+                    return Some(Arc::new(Network::new(model)));
+                }
+                Err(e) => {
+                    info!("Failed to load NNUE from {}: {e}", path.display());
+                }
+            }
+        }
+    }
+    info!("No NNUE model found, using material-only evaluation");
+    None
 }
 
 impl Engine {
     pub fn new() -> Result<Self, EngineError> {
         let position = Position::from_fen(START_FEN)?;
+        let network = find_nnue_model();
         Ok(Self {
             options: EngineOptions::default(),
             position,
             thread_pool: None,
+            network,
         })
     }
 
     fn ensure_thread_pool(&mut self) {
         if self.thread_pool.is_none() {
-            self.thread_pool = Some(ThreadPool::new(self.options.threads, self.options.hash_mb));
+            self.thread_pool = Some(ThreadPool::new(
+                self.options.threads,
+                self.options.hash_mb,
+                self.network.clone(),
+            ));
         }
     }
 
@@ -72,7 +118,11 @@ impl Engine {
         if self.thread_pool.is_some()
             && (self.options.threads != old_threads || self.options.hash_mb != old_hash)
         {
-            self.thread_pool = Some(ThreadPool::new(self.options.threads, self.options.hash_mb));
+            self.thread_pool = Some(ThreadPool::new(
+                self.options.threads,
+                self.options.hash_mb,
+                self.network.clone(),
+            ));
         }
         Ok(())
     }
@@ -109,7 +159,9 @@ impl Engine {
 
     pub fn go(&mut self, limits: &SearchLimits) -> SearchResult {
         self.ensure_thread_pool();
-        let tp = self.thread_pool.as_mut().expect("thread pool initialized");
+        let Some(tp) = self.thread_pool.as_mut() else {
+            return SearchResult::default();
+        };
 
         let search_limits = convert_limits(limits);
         tp.start_search(&self.position, &search_limits);

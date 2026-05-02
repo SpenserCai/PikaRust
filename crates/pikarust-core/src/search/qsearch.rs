@@ -217,11 +217,13 @@ impl Worker {
             // Make and search
             self.ss_current_moves[ss] = m;
             self.root_pos.do_move(m, gives_check);
+            self.root_pos.debug_check_consistency("after_do_move_qs");
             self.inc_nodes();
 
             let value = -self.qsearch(ply + 1, -beta, -alpha, pv_node);
 
             self.root_pos.undo_move(m);
+            self.root_pos.debug_check_consistency("after_undo_move_qs");
 
             if value > best_value {
                 best_value = value;

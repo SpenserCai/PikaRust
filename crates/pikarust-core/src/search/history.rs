@@ -220,15 +220,15 @@ pub fn new_continuation_history() -> ContinuationHistoryTable {
         for _ in 0..Square::NUM {
             sq_arr.push(PieceToHistory::new());
         }
-        let arr: [PieceToHistory; Square::NUM] = sq_arr.try_into().ok().unwrap_or_else(|| {
-            std::process::abort();
-        });
+        let Ok(arr) = sq_arr.try_into() else {
+            unreachable!()
+        };
         table.push(arr);
     }
-    table
-        .try_into()
-        .ok()
-        .unwrap_or_else(|| std::process::abort())
+    let Ok(boxed) = table.try_into() else {
+        unreachable!()
+    };
+    boxed
 }
 
 pub struct ContinuationHistory {

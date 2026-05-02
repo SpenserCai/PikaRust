@@ -338,6 +338,8 @@ impl Worker {
                 let null_value =
                     -self.ab_search::<false>(ply + 1, -beta, -beta + 1, depth - r, false);
                 self.root_pos.undo_null_move();
+                self.root_pos
+                    .debug_check_consistency("after_undo_null_move");
 
                 if null_value >= beta && !is_win(null_value) {
                     if self.nmp_min_ply > 0 || depth < 15 {
@@ -463,6 +465,7 @@ impl Worker {
             self.ss_current_moves[ss] = m;
             self.ss_in_check[ss] = gives_check;
             self.root_pos.do_move(m, gives_check);
+            self.root_pos.debug_check_consistency("after_do_move_ab");
             self.inc_nodes();
 
             new_depth += extension;

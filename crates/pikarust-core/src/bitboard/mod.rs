@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 #[allow(
     clippy::missing_const_for_fn,
     clippy::manual_range_contains,

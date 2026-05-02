@@ -214,6 +214,36 @@ impl Position {
         self.board[from] = Piece::NONE;
         self.board[to] = pc;
     }
+
+    pub fn debug_check_consistency(&self, context: &str) {
+        for sq_idx in 0..Square::NUM {
+            let sq = Square::from_raw_unchecked(sq_idx as u8);
+            let pc = self.board[sq];
+            let in_all = (self.by_type_bb[0] & Bitboard::from(sq)).is_not_empty();
+            if pc == Piece::NONE {
+                debug_assert!(
+                    !in_all,
+                    "CONSISTENCY[{context}]: sq={sq:?} is NONE in board but set in all_pieces bitboard"
+                );
+            } else {
+                debug_assert!(
+                    in_all,
+                    "CONSISTENCY[{context}]: sq={sq:?} has {pc:?} in board but NOT set in all_pieces bitboard"
+                );
+                let in_color = (self.by_color_bb[pc.color()] & Bitboard::from(sq)).is_not_empty();
+                debug_assert!(
+                    in_color,
+                    "CONSISTENCY[{context}]: sq={sq:?} has {pc:?} in board but NOT set in color bitboard"
+                );
+                let in_type =
+                    (self.by_type_bb[pc.piece_type().index()] & Bitboard::from(sq)).is_not_empty();
+                debug_assert!(
+                    in_type,
+                    "CONSISTENCY[{context}]: sq={sq:?} has {pc:?} in board but NOT set in type bitboard"
+                );
+            }
+        }
+    }
 }
 
 impl Clone for Position {

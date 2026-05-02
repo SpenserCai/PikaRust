@@ -115,7 +115,40 @@ impl Position {
         let to = m.to_sq();
         let occupied = (self.all_pieces() ^ from) | to;
 
-        if self.piece_on(from).piece_type() == PieceType::King {
+        let pc = self.piece_on(from);
+        if pc == crate::types::Piece::NONE {
+            let from_in_all = (self.all_pieces() & crate::bitboard::square_bb(from)).is_not_empty();
+            let from_in_white = (self.pieces_by_color(crate::types::Color::White)
+                & crate::bitboard::square_bb(from))
+            .is_not_empty();
+            let from_in_black = (self.pieces_by_color(crate::types::Color::Black)
+                & crate::bitboard::square_bb(from))
+            .is_not_empty();
+            let from_in_pawn = (self.pieces_by_type(PieceType::Pawn)
+                & crate::bitboard::square_bb(from))
+            .is_not_empty();
+            let white_pawns = self.pieces(crate::types::Color::White, PieceType::Pawn);
+            panic!(
+                "is_legal: piece_on(from={:?}) is NONE, to={:?}, move_raw={}, side={:?}, \
+                 all_pieces_popcount={}, in_all={}, in_white={}, in_black={}, in_pawn={}, \
+                 white_pawns_popcount={}, white_pawns_bits={:#0130b}, \
+                 fen={}",
+                from,
+                to,
+                m.raw(),
+                us,
+                self.all_pieces().popcount(),
+                from_in_all,
+                from_in_white,
+                from_in_black,
+                from_in_pawn,
+                white_pawns.popcount(),
+                white_pawns.raw(),
+                self.fen()
+            );
+        }
+
+        if pc.piece_type() == PieceType::King {
             return self.checkers_to(!us, to, occupied).is_empty();
         }
 

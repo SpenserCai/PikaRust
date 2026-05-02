@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod color;
 mod moves;
 mod piece;

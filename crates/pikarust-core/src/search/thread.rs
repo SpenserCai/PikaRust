@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use crate::nnue::Network;
 use crate::position::{GenType, Position, generate};
 use crate::types::{Move, VALUE_INFINITE, VALUE_NONE, Value, is_decisive};
 
@@ -18,7 +19,8 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    pub fn new(num_threads: usize, tt_size_mb: usize) -> Self {
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new(num_threads: usize, tt_size_mb: usize, network: Option<Arc<Network>>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let tt = Arc::new(TranspositionTable::new(tt_size_mb));
         let increase_depth = Arc::new(AtomicBool::new(true));
@@ -30,6 +32,7 @@ impl ThreadPool {
                 Arc::clone(&stop),
                 Arc::clone(&tt),
                 Arc::clone(&increase_depth),
+                network.clone(),
             ));
         }
 

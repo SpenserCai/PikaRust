@@ -122,6 +122,8 @@ impl ThreatOffsetTable {
         );
 
         Self {
+            // SAFETY: Box<[_; N]> from vec![...; N].into_boxed_slice() has the same layout
+            // as Box<[[[[u16; P]; S]; S]; P]> because the element types and count match.
             data: unsafe { Box::from_raw(Box::into_raw(data).cast()) },
         }
     }

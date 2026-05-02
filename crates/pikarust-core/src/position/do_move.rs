@@ -100,11 +100,12 @@ impl Position {
 
         let from = m.from_sq();
         let to = m.to_sq();
+        let captured = self.state.captured_piece;
 
         self.move_piece(to, from);
 
-        if self.state.captured_piece != Piece::NONE {
-            self.put_piece(self.state.captured_piece, to);
+        if captured != Piece::NONE {
+            self.put_piece(captured, to);
         }
 
         if let Some(prev_state) = self.state_stack.pop() {
@@ -113,6 +114,10 @@ impl Position {
         self.game_ply -= 1;
 
         self.bloom_filter.remove(self.state.key);
+
+        self.debug_check_consistency(&format!(
+            "inside_undo_move move={m:?} from={from:?} to={to:?} captured={captured:?}"
+        ));
     }
 
     pub fn do_null_move(&mut self) {

@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 mod accumulator;
+pub mod feature_transformer;
 pub mod features;
 pub mod layers;
 mod model;

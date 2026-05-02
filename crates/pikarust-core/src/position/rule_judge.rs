@@ -151,9 +151,11 @@ impl Position {
                 let m = moves.get(idx);
                 let gc = self.gives_check(m);
                 self.do_move(m, gc);
+                self.debug_check_consistency("after_do_move_rule_judge");
                 let opp_moves = generate(self, GenType::Legal);
                 let is_mate = opp_moves.is_empty();
                 self.undo_move(m);
+                self.debug_check_consistency("after_undo_move_rule_judge");
                 if is_mate {
                     return None;
                 }

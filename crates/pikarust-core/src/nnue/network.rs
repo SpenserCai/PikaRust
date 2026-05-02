@@ -179,6 +179,7 @@ mod tests {
     use super::super::model::LAYER_STACKS;
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_layer_stack_buckets_range() {
         for us_rook in 0..3 {
             for opp_rook in 0..3 {

@@ -156,6 +156,7 @@ impl SimdOps for Neon {
     }
 
     fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+        debug_assert_eq!(shift, 6);
         let len = input.len();
         let chunks = len / 16;
         let remainder = chunks * 16;
@@ -195,7 +196,6 @@ impl SimdOps for Neon {
             }
         }
 
-        let _ = shift;
         for i in remainder..len {
             output[i] = (input[i] >> 6).clamp(0, 127) as u8;
         }
