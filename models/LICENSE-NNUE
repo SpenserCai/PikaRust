@@ -1,0 +1,15 @@
+# NNUE-License
+
+Source: https://github.com/official-pikafish/Networks
+
+Any usage of the Pikafish weights constitutes agreement to this License.
+
+The weights file (pikafish.nnue) released with the Pikafish and the weights file further
+derived from them are:
+
+1. Only for legal use, any consequences caused by any use beyond the legal scope
+   (e.g. online cheating) shall be borne by the user.
+2. No commercial use without permission.
+
+The use of nnue weights for commercial purposes by
+[these individuals and organizations](https://pikafish.org/list.html) is permitted.

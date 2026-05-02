@@ -38,6 +38,7 @@ tmps/
 .kiro/
 refs/
 scripts/sync-private.sh
+tests/fixtures/pikafish/
 
 # ===== Secrets =====
 secrets.toml
