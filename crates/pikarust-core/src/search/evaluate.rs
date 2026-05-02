@@ -79,7 +79,10 @@ mod tests {
         // Using evaluate with balanced NNUE values (psqt=0, positional=0) should give ~0.
         let pos = Position::start_pos().expect("start_pos should parse");
         let v = evaluate(&pos, 0, 0, 0);
-        assert_eq!(v, 0, "symmetric position with zero NNUE should evaluate to 0");
+        assert_eq!(
+            v, 0,
+            "symmetric position with zero NNUE should evaluate to 0"
+        );
     }
 
     #[test]

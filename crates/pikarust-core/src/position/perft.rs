@@ -106,7 +106,10 @@ mod tests {
         let nodes = perft(&mut pos, 1);
         // Just verify it produces a reasonable number of moves (not zero, not absurd)
         assert!(nodes > 0, "midgame position should have legal moves");
-        assert!(nodes < 100, "midgame position should have < 100 legal moves, got {nodes}");
+        assert!(
+            nodes < 100,
+            "midgame position should have < 100 legal moves, got {nodes}"
+        );
     }
 
     /// Position: 1cbak4/9/n2a5/2p1p3p/5cp2/2n2N3/6PCP/3AB4/2C6/3A1K1N1 w

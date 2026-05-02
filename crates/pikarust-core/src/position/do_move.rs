@@ -186,8 +186,7 @@ mod tests {
     use super::*;
     use crate::position::movegen::{GenType, generate};
 
-    const START_FEN: &str =
-        "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
+    const START_FEN: &str = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
 
     // -------------------------------------------------------------------
     // do_move / undo_move roundtrip: Zobrist key preservation
@@ -248,8 +247,7 @@ mod tests {
 
     #[test]
     fn test_do_undo_move_preserves_key_black_to_move() {
-        let fen =
-            "2bak4/9/3a5/p2Np3p/3n1P3/3pc3P/P4r1c1/B2CC2R1/4A4/3AK1B2 b - - 0 1";
+        let fen = "2bak4/9/3a5/p2Np3p/3n1P3/3pc3P/P4r1c1/B2CC2R1/4A4/3AK1B2 b - - 0 1";
         let mut pos = Position::from_fen(fen).unwrap();
         let original_key = pos.key();
 
