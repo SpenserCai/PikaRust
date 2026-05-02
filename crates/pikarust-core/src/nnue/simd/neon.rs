@@ -202,8 +202,46 @@ impl SimdOps for Neon {
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        for (i, &x) in input.iter().enumerate() {
-            let v = i64::from(x);
+        debug_assert_eq!(shift, 6);
+        let len = input.len();
+        let chunks = len / 8;
+        let remainder = chunks * 8;
+
+        // Scalar formula: (v * v) >> (2*shift + 7) = (v * v) >> 19, clamped to [0, 127]
+        // NEON path: narrow i32→i16 (saturating), square i16→i32, shift >>19,
+        // clamp to 127, narrow i32→i16→u8.
+
+        // SAFETY: NEON is always available on aarch64. We process 8 i32 elements
+        // at a time. All accesses are within bounds.
+        unsafe {
+            let in_ptr = input.as_ptr();
+            let out_ptr = output.as_mut_ptr();
+            let max127 = vdupq_n_s16(127);
+
+            for i in 0..chunks {
+                let base = i * 8;
+                let v0 = vld1q_s32(in_ptr.add(base));
+                let v1 = vld1q_s32(in_ptr.add(base + 4));
+
+                let n0 = vqmovn_s32(v0);
+                let n1 = vqmovn_s32(v1);
+                let s16 = vcombine_s16(n0, n1);
+
+                let squared_lo = vmull_s16(vget_low_s16(s16), vget_low_s16(s16));
+                let squared_hi = vmull_s16(vget_high_s16(s16), vget_high_s16(s16));
+
+                let shifted_lo = vshrq_n_s32::<19>(squared_lo);
+                let shifted_hi = vshrq_n_s32::<19>(squared_hi);
+
+                let narrow = vcombine_s16(vqmovn_s32(shifted_lo), vqmovn_s32(shifted_hi));
+                let clamped = vminq_s16(narrow, max127);
+                let packed = vqmovun_s16(clamped);
+                vst1_u8(out_ptr.add(base), packed);
+            }
+        }
+
+        for i in remainder..len {
+            let v = i64::from(input[i]);
             let squared = (v * v) >> (2 * shift + 7);
             output[i] = squared.min(127) as u8;
         }
@@ -219,13 +257,68 @@ impl SimdOps for Neon {
     ) {
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
-        for i in 0..in_dim.min(input.len()) {
-            if input[i] == 0 {
-                continue;
+        if out_dim >= 16 {
+            let out_chunks = out_dim / 16;
+
+            // SAFETY: NEON is always available on aarch64. We process 16 output
+            // elements at a time. For each non-zero input, we broadcast the input
+            // value, widen 16 weight bytes to i16, multiply, widen to i32, and
+            // accumulate. All pointer arithmetic stays within slice bounds.
+            unsafe {
+                let out_ptr = output.as_mut_ptr();
+
+                for (i, &in_val_byte) in input.iter().enumerate().take(in_dim.min(input.len())) {
+                    if in_val_byte == 0 {
+                        continue;
+                    }
+                    let in_val = vdupq_n_s16(i16::from(in_val_byte));
+                    let w_base = i * out_dim;
+
+                    for c in 0..out_chunks {
+                        let o = c * 16;
+                        let w_ptr = weights.as_ptr().add(w_base + o);
+
+                        let w8 = vld1q_s8(w_ptr);
+                        let w16_lo = vmovl_s8(vget_low_s8(w8));
+                        let w16_hi = vmovl_high_s8(w8);
+
+                        let prod_lo_lo = vmull_s16(vget_low_s16(in_val), vget_low_s16(w16_lo));
+                        let prod_lo_hi = vmull_s16(vget_low_s16(in_val), vget_high_s16(w16_lo));
+                        let prod_hi_lo = vmull_s16(vget_low_s16(in_val), vget_low_s16(w16_hi));
+                        let prod_hi_hi = vmull_s16(vget_low_s16(in_val), vget_high_s16(w16_hi));
+
+                        let a0 = vld1q_s32(out_ptr.add(o));
+                        let a1 = vld1q_s32(out_ptr.add(o + 4));
+                        let a2 = vld1q_s32(out_ptr.add(o + 8));
+                        let a3 = vld1q_s32(out_ptr.add(o + 12));
+
+                        vst1q_s32(out_ptr.add(o), vaddq_s32(a0, prod_lo_lo));
+                        vst1q_s32(out_ptr.add(o + 4), vaddq_s32(a1, prod_lo_hi));
+                        vst1q_s32(out_ptr.add(o + 8), vaddq_s32(a2, prod_hi_lo));
+                        vst1q_s32(out_ptr.add(o + 12), vaddq_s32(a3, prod_hi_hi));
+                    }
+                }
             }
-            let in_val = i32::from(input[i]);
-            for o in 0..out_dim {
-                output[o] += in_val * i32::from(weights[i * out_dim + o]);
+
+            let simd_end = out_chunks * 16;
+            for i in 0..in_dim.min(input.len()) {
+                if input[i] == 0 {
+                    continue;
+                }
+                let in_val = i32::from(input[i]);
+                for o in simd_end..out_dim {
+                    output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                }
+            }
+        } else {
+            for i in 0..in_dim.min(input.len()) {
+                if input[i] == 0 {
+                    continue;
+                }
+                let in_val = i32::from(input[i]);
+                for o in 0..out_dim {
+                    output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                }
             }
         }
     }
@@ -257,11 +350,13 @@ impl SimdOps for Neon {
         let chunks = input.len() / 4;
         for i in 0..chunks {
             let base = i * 4;
-            if input[base] != 0
-                || input[base + 1] != 0
-                || input[base + 2] != 0
-                || input[base + 3] != 0
-            {
+            let word = u32::from_ne_bytes([
+                input[base],
+                input[base + 1],
+                input[base + 2],
+                input[base + 3],
+            ]);
+            if word != 0 {
                 nnz_indices.push(i);
             }
         }
@@ -277,19 +372,86 @@ impl SimdOps for Neon {
     ) {
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
-        for &block_idx in nnz_indices {
-            let base = block_idx * 4;
-            for sub in 0..4 {
-                let idx = base + sub;
-                if idx >= input.len() {
-                    break;
+        if out_dim >= 16 {
+            let out_chunks = out_dim / 16;
+
+            // SAFETY: NEON is always available on aarch64. Same pattern as
+            // affine_propagate but only visiting non-zero input blocks.
+            unsafe {
+                let out_ptr = output.as_mut_ptr();
+
+                for &block_idx in nnz_indices {
+                    let base = block_idx * 4;
+                    for sub in 0..4 {
+                        let idx = base + sub;
+                        if idx >= input.len() {
+                            break;
+                        }
+                        if input[idx] == 0 {
+                            continue;
+                        }
+                        let in_val = vdupq_n_s16(i16::from(input[idx]));
+                        let w_base = idx * out_dim;
+
+                        for c in 0..out_chunks {
+                            let o = c * 16;
+                            let w_ptr = weights.as_ptr().add(w_base + o);
+
+                            let w8 = vld1q_s8(w_ptr);
+                            let w16_lo = vmovl_s8(vget_low_s8(w8));
+                            let w16_hi = vmovl_high_s8(w8);
+
+                            let p0 = vmull_s16(vget_low_s16(in_val), vget_low_s16(w16_lo));
+                            let p1 = vmull_s16(vget_low_s16(in_val), vget_high_s16(w16_lo));
+                            let p2 = vmull_s16(vget_low_s16(in_val), vget_low_s16(w16_hi));
+                            let p3 = vmull_s16(vget_low_s16(in_val), vget_high_s16(w16_hi));
+
+                            let a0 = vld1q_s32(out_ptr.add(o));
+                            let a1 = vld1q_s32(out_ptr.add(o + 4));
+                            let a2 = vld1q_s32(out_ptr.add(o + 8));
+                            let a3 = vld1q_s32(out_ptr.add(o + 12));
+
+                            vst1q_s32(out_ptr.add(o), vaddq_s32(a0, p0));
+                            vst1q_s32(out_ptr.add(o + 4), vaddq_s32(a1, p1));
+                            vst1q_s32(out_ptr.add(o + 8), vaddq_s32(a2, p2));
+                            vst1q_s32(out_ptr.add(o + 12), vaddq_s32(a3, p3));
+                        }
+                    }
                 }
-                if input[idx] == 0 {
-                    continue;
+            }
+
+            let simd_end = out_chunks * 16;
+            for &block_idx in nnz_indices {
+                let base = block_idx * 4;
+                for sub in 0..4 {
+                    let idx = base + sub;
+                    if idx >= input.len() {
+                        break;
+                    }
+                    if input[idx] == 0 {
+                        continue;
+                    }
+                    let in_val = i32::from(input[idx]);
+                    for o in simd_end..out_dim {
+                        output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                    }
                 }
-                let in_val = i32::from(input[idx]);
-                for o in 0..out_dim {
-                    output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+            }
+        } else {
+            for &block_idx in nnz_indices {
+                let base = block_idx * 4;
+                for sub in 0..4 {
+                    let idx = base + sub;
+                    if idx >= input.len() {
+                        break;
+                    }
+                    if input[idx] == 0 {
+                        continue;
+                    }
+                    let in_val = i32::from(input[idx]);
+                    for o in 0..out_dim {
+                        output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                    }
                 }
             }
         }

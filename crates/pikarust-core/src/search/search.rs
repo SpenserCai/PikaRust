@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::nnue::{Accumulator, Network};
+use crate::nnue::features::half_ka_v2_hm;
+use crate::nnue::{AccumulatorStack, DiffType, DirtyPiece, Network};
 use crate::position::Position;
 use crate::types::{
-    Color, Depth, MAX_PLY, Move, VALUE_DRAW, VALUE_INFINITE, VALUE_MATE_IN_MAX_PLY,
-    VALUE_MATED_IN_MAX_PLY, VALUE_NONE, VALUE_ZERO, Value, is_valid,
+    Color, Depth, MAX_PLY, Move, Piece, PieceType, Square, VALUE_DRAW, VALUE_INFINITE,
+    VALUE_MATE_IN_MAX_PLY, VALUE_MATED_IN_MAX_PLY, VALUE_NONE, VALUE_ZERO, Value, is_valid,
 };
 
 use super::evaluate;
@@ -118,6 +119,8 @@ pub struct Worker {
 
     pub network: Option<Arc<Network>>,
 
+    pub acc_stack: AccumulatorStack,
+
     pub tm: TimeManager,
     pub best_previous_score: Value,
     pub best_previous_avg_score: Value,
@@ -187,6 +190,8 @@ impl Worker {
             num_threads,
 
             network,
+
+            acc_stack: AccumulatorStack::new(MAX_PLY as usize + 10),
 
             tm: TimeManager::new(),
             best_previous_score: VALUE_INFINITE,
@@ -260,38 +265,147 @@ impl Worker {
             + 1934
     }
 
-    pub fn evaluate_pos(&self) -> Value {
+    pub fn evaluate_pos(&mut self) -> Value {
         let optimism = self.optimism[self.root_pos.side_to_move().index()];
-        self.network.as_ref().map_or_else(
-            || evaluate::evaluate_simple(&self.root_pos, optimism),
-            |net| {
-                let mut psq_acc = Accumulator::new();
-                let mut threat_acc = Accumulator::new();
+        let Some(net) = self.network.as_ref() else {
+            return evaluate::evaluate_simple(&self.root_pos, optimism);
+        };
+
+        let psq_computed = self.acc_stack.current_psq().acc.computed[0]
+            && self.acc_stack.current_psq().acc.computed[1];
+
+        if !psq_computed {
+            if let Some(prev) = self.acc_stack.prev_psq() {
+                if prev.acc.computed[0] && prev.acc.computed[1] {
+                    if let DiffType::DirtyPiece(ref dirty) = self.acc_stack.current_psq().diff {
+                        let dirty_clone = dirty.clone();
+                        let prev_acc = prev.acc.clone();
+                        let acc = &mut self.acc_stack.current_psq_mut().acc;
+                        crate::nnue::feature_transformer::update_psq_accumulator_incremental(
+                            net.model(),
+                            &self.root_pos,
+                            &prev_acc,
+                            acc,
+                            &dirty_clone,
+                        );
+                    } else {
+                        let acc = &mut self.acc_stack.current_psq_mut().acc;
+                        crate::nnue::feature_transformer::refresh_psq_accumulator(
+                            net.model(),
+                            &self.root_pos,
+                            acc,
+                        );
+                    }
+                } else {
+                    let acc = &mut self.acc_stack.current_psq_mut().acc;
+                    crate::nnue::feature_transformer::refresh_psq_accumulator(
+                        net.model(),
+                        &self.root_pos,
+                        acc,
+                    );
+                }
+            } else {
+                let acc = &mut self.acc_stack.current_psq_mut().acc;
                 crate::nnue::feature_transformer::refresh_psq_accumulator(
                     net.model(),
                     &self.root_pos,
-                    &mut psq_acc,
+                    acc,
                 );
-                crate::nnue::feature_transformer::refresh_threat_accumulator(
-                    net.model(),
-                    &self.root_pos,
-                    &mut threat_acc,
-                );
-                let (nnue_psqt, nnue_positional) = net.evaluate(
-                    &psq_acc.accumulation,
-                    &threat_acc.accumulation,
-                    &psq_acc.psqt_accumulation,
-                    &threat_acc.psqt_accumulation,
-                    &self.root_pos.piece_count,
-                    self.root_pos.side_to_move(),
-                );
-                evaluate::evaluate(&self.root_pos, nnue_psqt, nnue_positional, optimism)
-            },
-        )
+            }
+        }
+
+        let threat_computed = self.acc_stack.current_threat().acc.computed[0]
+            && self.acc_stack.current_threat().acc.computed[1];
+        if !threat_computed {
+            let acc = &mut self.acc_stack.current_threat_mut().acc;
+            crate::nnue::feature_transformer::refresh_threat_accumulator(
+                net.model(),
+                &self.root_pos,
+                acc,
+            );
+        }
+
+        let psq_acc = &self.acc_stack.current_psq().acc;
+        let threat_acc = &self.acc_stack.current_threat().acc;
+
+        let (nnue_psqt, nnue_positional) = net.evaluate(
+            &psq_acc.accumulation,
+            &threat_acc.accumulation,
+            &psq_acc.psqt_accumulation,
+            &threat_acc.psqt_accumulation,
+            &self.root_pos.piece_count,
+            self.root_pos.side_to_move(),
+        );
+        evaluate::evaluate(&self.root_pos, nnue_psqt, nnue_positional, optimism)
     }
 
     pub fn value_draw(&self) -> Value {
         VALUE_DRAW - 1 + (self.node_count() & 0x2) as Value
+    }
+
+    pub fn push_acc_for_move(&mut self, m: Move) {
+        let from = m.from_sq();
+        let to = m.to_sq();
+        let pc = self.root_pos.piece_on(from);
+        let captured = self.root_pos.piece_on(to);
+
+        let attack_bucket_before = [
+            half_ka_v2_hm::make_attack_bucket(&self.root_pos, Color::White),
+            half_ka_v2_hm::make_attack_bucket(&self.root_pos, Color::Black),
+        ];
+
+        let mut dirty = DirtyPiece::new();
+        dirty.pc[0] = pc;
+        dirty.from[0] = from;
+        dirty.to[0] = to;
+
+        if captured == Piece::NONE {
+            dirty.dirty_num = 1;
+        } else {
+            dirty.dirty_num = 2;
+            dirty.pc[1] = captured;
+            dirty.from[1] = to;
+            dirty.to[1] = Square::NONE;
+        }
+
+        let us = self.root_pos.side_to_move();
+        if pc.piece_type() == PieceType::King {
+            dirty.requires_refresh[0] = true;
+            dirty.requires_refresh[1] = true;
+        }
+
+        if captured != Piece::NONE {
+            let cpt = captured.piece_type();
+            if cpt == PieceType::Rook || cpt == PieceType::Knight || cpt == PieceType::Cannon {
+                let them = !us;
+                let new_attack_bucket = {
+                    let rook_count = self.root_pos.count_type(them, PieceType::Rook)
+                        - u8::from(cpt == PieceType::Rook);
+                    let kc_count = self.root_pos.count_type(them, PieceType::Knight)
+                        + self.root_pos.count_type(them, PieceType::Cannon)
+                        - u8::from(cpt == PieceType::Knight || cpt == PieceType::Cannon);
+                    u32::from(rook_count > 0) * 2 + u32::from(kc_count > 0)
+                };
+                if new_attack_bucket != attack_bucket_before[them as usize] {
+                    dirty.requires_refresh[them as usize] = true;
+                }
+            }
+        }
+
+        self.acc_stack.push();
+        self.acc_stack.set_psq_diff(dirty);
+    }
+
+    pub fn push_acc(&mut self) {
+        self.acc_stack.push();
+    }
+
+    pub fn pop_acc(&mut self) {
+        self.acc_stack.pop();
+    }
+
+    pub fn reset_acc(&mut self) {
+        self.acc_stack.reset();
     }
 
     pub fn check_time(&mut self) {

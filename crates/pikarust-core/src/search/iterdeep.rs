@@ -23,6 +23,7 @@ impl Worker {
         let mut last_best_move_depth: Depth = 0;
 
         self.reset_ss();
+        self.reset_acc();
 
         if is_main {
             if self.best_previous_score == VALUE_INFINITE {
@@ -458,6 +459,7 @@ impl Worker {
                     let pc_gives_check = self.root_pos.gives_check(pc_move);
                     self.ss_current_moves[ss] = pc_move;
                     self.ss_in_check[ss] = pc_gives_check;
+                    self.push_acc_for_move(pc_move);
                     self.root_pos.do_move(pc_move, pc_gives_check);
                     self.inc_nodes();
 
@@ -477,6 +479,7 @@ impl Worker {
                     }
 
                     self.root_pos.undo_move(pc_move);
+                    self.pop_acc();
 
                     if pc_value >= prob_cut_beta {
                         // Save ProbCut data into transposition table
@@ -619,6 +622,7 @@ impl Worker {
             self.ss_current_moves[ss] = m;
             self.ss_in_check[ss] = gives_check;
             self.set_cont_hist_index(ply, in_check, capture, moved_piece, m.to_sq());
+            self.push_acc_for_move(m);
             self.root_pos.do_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_ab");
             self.inc_nodes();
@@ -704,6 +708,7 @@ impl Worker {
 
             // Undo move
             self.root_pos.undo_move(m);
+            self.pop_acc();
 
             if self.stop.load(Ordering::Relaxed) {
                 return VALUE_ZERO;

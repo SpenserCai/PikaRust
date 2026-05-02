@@ -194,6 +194,7 @@ impl Worker {
 
             // Make and search
             self.ss_current_moves[ss] = m;
+            self.push_acc_for_move(m);
             self.root_pos.do_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_qs");
             self.inc_nodes();
@@ -201,6 +202,7 @@ impl Worker {
             let value = -self.qsearch(ply + 1, -beta, -alpha, pv_node);
 
             self.root_pos.undo_move(m);
+            self.pop_acc();
             self.root_pos.debug_check_consistency("after_undo_move_qs");
 
             if value > best_value {
