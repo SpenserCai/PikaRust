@@ -80,6 +80,7 @@ pub struct MovePicker {
 
 // SAFETY: MovePicker only lives within a single search call where all referenced
 // data outlives it. The raw pointers are never sent across threads.
+#[allow(unsafe_code)]
 unsafe impl Send for MovePicker {}
 
 impl MovePicker {
@@ -232,6 +233,7 @@ impl MovePicker {
         self.skip_quiets = true;
     }
 
+    #[allow(unsafe_code)]
     fn score_captures(&mut self, pos: &Position) {
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Captures);
@@ -253,6 +255,7 @@ impl MovePicker {
         }
     }
 
+    #[allow(unsafe_code)]
     fn score_quiets(&mut self, pos: &Position) {
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Quiets);
@@ -306,6 +309,7 @@ impl MovePicker {
         }
     }
 
+    #[allow(unsafe_code)]
     fn score_evasions(&mut self, pos: &Position) {
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Evasions);

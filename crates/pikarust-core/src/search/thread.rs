@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 
 use crate::nnue::Network;
@@ -16,6 +16,7 @@ pub struct ThreadPool {
     stop: Arc<AtomicBool>,
     tt: Arc<TranspositionTable>,
     increase_depth: Arc<AtomicBool>,
+    tot_best_move_changes: Arc<AtomicU64>,
 }
 
 impl ThreadPool {
@@ -24,6 +25,7 @@ impl ThreadPool {
         let stop = Arc::new(AtomicBool::new(false));
         let tt = Arc::new(TranspositionTable::new(tt_size_mb));
         let increase_depth = Arc::new(AtomicBool::new(true));
+        let tot_best_move_changes = Arc::new(AtomicU64::new(0));
 
         let mut workers = Vec::with_capacity(num_threads);
         for i in 0..num_threads {
@@ -32,6 +34,8 @@ impl ThreadPool {
                 Arc::clone(&stop),
                 Arc::clone(&tt),
                 Arc::clone(&increase_depth),
+                Arc::clone(&tot_best_move_changes),
+                num_threads,
                 network.clone(),
             ));
         }
@@ -42,6 +46,7 @@ impl ThreadPool {
             stop,
             tt,
             increase_depth,
+            tot_best_move_changes,
         }
     }
 
@@ -61,6 +66,7 @@ impl ThreadPool {
 
         self.stop.store(false, Ordering::SeqCst);
         self.increase_depth.store(true, Ordering::SeqCst);
+        self.tot_best_move_changes.store(0, Ordering::SeqCst);
         if let Some(tt) = Arc::get_mut(&mut self.tt) {
             tt.new_search();
         }
@@ -87,8 +93,43 @@ impl ThreadPool {
 
         for mut w in workers_to_spawn {
             let handle = thread::spawn(move || {
-                w.iterative_deepening();
-                w
+                // Clone Arc references before moving `w` into catch_unwind,
+                // so we can reconstruct a worker if the closure panics.
+                let stop = Arc::clone(&w.stop);
+                let tt = Arc::clone(&w.tt);
+                let increase_depth = Arc::clone(&w.increase_depth);
+                let tot_best_move_changes = Arc::clone(&w.tot_best_move_changes);
+                let num_threads = w.num_threads;
+                let network = w.network.clone();
+                let thread_idx = w.thread_idx;
+
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    w.iterative_deepening();
+                    w
+                }));
+                match result {
+                    Ok(worker) => worker,
+                    Err(payload) => {
+                        let msg = payload
+                            .downcast_ref::<&str>()
+                            .map(|s| (*s).to_owned())
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".to_owned());
+                        log::error!("search worker {thread_idx} panicked: {msg}");
+                        // Signal stop so other threads wind down
+                        stop.store(true, Ordering::SeqCst);
+                        // Return a fresh worker sharing the same Arcs
+                        Worker::new(
+                            thread_idx,
+                            stop,
+                            tt,
+                            increase_depth,
+                            tot_best_move_changes,
+                            num_threads,
+                            network,
+                        )
+                    }
+                }
             });
             handles.push(Some(handle));
         }
@@ -99,8 +140,13 @@ impl ThreadPool {
     pub fn wait_for_search(&mut self) {
         for handle in &mut self.handles {
             if let Some(h) = handle.take() {
-                if let Ok(w) = h.join() {
-                    self.workers.push(w);
+                match h.join() {
+                    Ok(w) => self.workers.push(w),
+                    Err(_) => {
+                        // This should not happen since we use catch_unwind,
+                        // but log it defensively.
+                        log::error!("search thread join failed unexpectedly");
+                    }
                 }
             }
         }

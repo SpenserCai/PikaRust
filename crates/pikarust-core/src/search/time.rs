@@ -169,19 +169,6 @@ impl TimeManager {
         self.maximum_time
     }
 
-    pub fn adjust_time(
-        &mut self,
-        falling_eval: f64,
-        time_reduction: f64,
-        best_move_instability: f64,
-    ) {
-        let total_time = self.optimum_time as f64
-            * falling_eval
-            * (1.0 / time_reduction)
-            * best_move_instability;
-        self.optimum_time = total_time.max(1.0) as TimePoint;
-    }
-
     pub const fn clear(&mut self) {
         self.optimum_time = 0;
         self.maximum_time = 0;

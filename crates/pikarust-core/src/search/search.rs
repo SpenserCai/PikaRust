@@ -10,8 +10,8 @@ use crate::types::{
 
 use super::evaluate;
 use super::history::{
-    ButterflyHistory, CapturePieceToHistory, ContinuationHistory, LowPlyHistory, PawnHistory,
-    TTMoveHistory,
+    ButterflyHistory, CapturePieceToHistory, ContHistIndex, ContinuationCorrectionHistory,
+    ContinuationHistory, LowPlyHistory, PawnHistory, TTMoveHistory, UnifiedCorrectionHistory,
 };
 use super::time::{SearchLimits, TimeManager};
 use super::tt::TranspositionTable;
@@ -105,12 +105,16 @@ pub struct Worker {
     pub continuation_history: ContinuationHistory,
     pub pawn_history: PawnHistory,
     pub tt_move_history: TTMoveHistory,
+    pub correction_history: UnifiedCorrectionHistory,
+    pub continuation_correction_history: ContinuationCorrectionHistory,
 
     pub reductions: [i32; MAX_PLY as usize + 10],
 
     pub stop: Arc<AtomicBool>,
     pub tt: Arc<TranspositionTable>,
     pub increase_depth: Arc<AtomicBool>,
+    pub tot_best_move_changes: Arc<AtomicU64>,
+    pub num_threads: usize,
 
     pub network: Option<Arc<Network>>,
 
@@ -133,6 +137,8 @@ pub struct Worker {
     pub ss_reductions: Vec<i32>,
     pub ss_stat_scores: Vec<i32>,
     pub ss_follow_pvs: Vec<bool>,
+    pub ss_cont_hist_indices: Vec<ContHistIndex>,
+    pub ss_tt_hits: Vec<bool>,
 }
 
 impl Worker {
@@ -141,6 +147,8 @@ impl Worker {
         stop: Arc<AtomicBool>,
         tt: Arc<TranspositionTable>,
         increase_depth: Arc<AtomicBool>,
+        tot_best_move_changes: Arc<AtomicU64>,
+        num_threads: usize,
         network: Option<Arc<Network>>,
     ) -> Self {
         let ss_size = MAX_PLY as usize + 10;
@@ -167,12 +175,16 @@ impl Worker {
             continuation_history: ContinuationHistory::new(),
             pawn_history: PawnHistory::new(),
             tt_move_history: TTMoveHistory::new(),
+            correction_history: UnifiedCorrectionHistory::new(1),
+            continuation_correction_history: ContinuationCorrectionHistory::new(),
 
             reductions: [0; MAX_PLY as usize + 10],
 
             stop,
             tt,
             increase_depth,
+            tot_best_move_changes,
+            num_threads,
 
             network,
 
@@ -194,6 +206,8 @@ impl Worker {
             ss_reductions: vec![0; ss_size],
             ss_stat_scores: vec![0; ss_size],
             ss_follow_pvs: vec![false; ss_size],
+            ss_cont_hist_indices: vec![ContHistIndex::SENTINEL; ss_size],
+            ss_tt_hits: vec![false; ss_size],
         };
         w.init_reductions();
         w
@@ -212,6 +226,8 @@ impl Worker {
         self.continuation_history.fill(-436);
         self.pawn_history.fill(0);
         self.tt_move_history.reset();
+        self.correction_history.clear();
+        self.continuation_correction_history.fill(0);
         self.init_reductions();
     }
 
@@ -315,6 +331,8 @@ impl Worker {
         self.ss_reductions.fill(0);
         self.ss_stat_scores.fill(0);
         self.ss_follow_pvs.fill(false);
+        self.ss_cont_hist_indices.fill(ContHistIndex::SENTINEL);
+        self.ss_tt_hits.fill(false);
     }
 
     #[inline]

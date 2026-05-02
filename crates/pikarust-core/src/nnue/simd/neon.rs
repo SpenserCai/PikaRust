@@ -202,10 +202,9 @@ impl SimdOps for Neon {
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        let max_val = 127i32 << shift;
         for (i, &x) in input.iter().enumerate() {
-            let clamped = i64::from(x.clamp(0, max_val));
-            let squared = (clamped * clamped) >> (2 * shift + 7);
+            let v = i64::from(x);
+            let squared = (v * v) >> (2 * shift + 7);
             output[i] = squared.min(127) as u8;
         }
     }

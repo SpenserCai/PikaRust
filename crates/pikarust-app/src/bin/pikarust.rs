@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

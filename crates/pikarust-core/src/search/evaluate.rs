@@ -68,4 +68,102 @@ mod tests {
         // The value should be reasonable
         assert!(v.abs() < 10000);
     }
+
+    // -------------------------------------------------------------------
+    // NNUE evaluation smoke tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_evaluate_startpos_near_zero() {
+        // Start position is symmetric, so NNUE-like evaluation should be near 0.
+        // Using evaluate with balanced NNUE values (psqt=0, positional=0) should give ~0.
+        let pos = Position::start_pos().expect("start_pos should parse");
+        let v = evaluate(&pos, 0, 0, 0);
+        assert_eq!(v, 0, "symmetric position with zero NNUE should evaluate to 0");
+    }
+
+    #[test]
+    fn test_evaluate_positive_nnue_gives_positive_score() {
+        let pos = Position::start_pos().expect("start_pos should parse");
+        // Positive NNUE values should produce a positive evaluation
+        let v = evaluate(&pos, 200, 100, 0);
+        assert!(v > 0, "positive NNUE should give positive eval, got {v}");
+    }
+
+    #[test]
+    fn test_evaluate_negative_nnue_gives_negative_score() {
+        let pos = Position::start_pos().expect("start_pos should parse");
+        // Negative NNUE values should produce a negative evaluation
+        let v = evaluate(&pos, -200, -100, 0);
+        assert!(v < 0, "negative NNUE should give negative eval, got {v}");
+    }
+
+    #[test]
+    fn test_evaluate_simple_material_advantage() {
+        // Position where white has a rook advantage
+        let fen = "4k4/9/9/9/9/9/9/9/9/4K3R w - - 0 1";
+        let pos = Position::from_fen(fen).expect("should parse");
+        let v = evaluate_simple(&pos, 0);
+        assert!(
+            v > 0,
+            "white with extra rook should have positive eval, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_simple_material_disadvantage() {
+        // Position where white is down a rook (black has extra rook)
+        let fen = "4k3r/9/9/9/9/9/9/9/9/4K4 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("should parse");
+        let v = evaluate_simple(&pos, 0);
+        assert!(
+            v < 0,
+            "white down a rook should have negative eval, got {v}"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_never_exceeds_mate_bounds() {
+        // Even with extreme NNUE values, evaluate should clamp
+        let pos = Position::start_pos().expect("start_pos should parse");
+        let v = evaluate(&pos, 30000, 30000, 30000);
+        assert!(v < VALUE_MATE_IN_MAX_PLY, "should be clamped below mate");
+        assert!(v > VALUE_MATED_IN_MAX_PLY, "should be clamped above -mate");
+
+        let v2 = evaluate(&pos, -30000, -30000, -30000);
+        assert!(v2 < VALUE_MATE_IN_MAX_PLY);
+        assert!(v2 > VALUE_MATED_IN_MAX_PLY);
+    }
+
+    #[test]
+    fn test_evaluate_complexity_effect() {
+        let pos = Position::start_pos().expect("start_pos should parse");
+        // When psqt and positional are far apart, complexity is high
+        // This should reduce the absolute value of the evaluation
+        let v_low_complexity = evaluate(&pos, 500, 500, 0);
+        let v_high_complexity = evaluate(&pos, 1000, 0, 0);
+        // Both have same sum (1000) but different complexity
+        // High complexity should dampen the score more
+        assert!(
+            v_low_complexity.abs() >= v_high_complexity.abs(),
+            "high complexity should dampen: low={v_low_complexity}, high={v_high_complexity}"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_optimism_effect() {
+        let pos = Position::start_pos().expect("start_pos should parse");
+        // Optimism should shift the evaluation
+        let v_no_opt = evaluate(&pos, 300, 200, 0);
+        let v_pos_opt = evaluate(&pos, 300, 200, 500);
+        let v_neg_opt = evaluate(&pos, 300, 200, -500);
+        assert!(
+            v_pos_opt > v_no_opt,
+            "positive optimism should increase eval"
+        );
+        assert!(
+            v_neg_opt < v_no_opt,
+            "negative optimism should decrease eval"
+        );
+    }
 }

@@ -52,6 +52,11 @@ cast_possible_wrap = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_transmute_annotations = "allow"
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+todo = "deny"
+unimplemented = "deny"
 
 [profile.release]
 opt-level = 3

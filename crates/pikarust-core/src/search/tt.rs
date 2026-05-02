@@ -169,12 +169,15 @@ pub struct TTWriter {
 }
 
 // SAFETY: TTEntry uses AtomicU64 internally, so concurrent access is safe.
+#[allow(unsafe_code)]
 unsafe impl Send for TTWriter {}
+#[allow(unsafe_code)]
 unsafe impl Sync for TTWriter {}
 
 impl TTWriter {
     #[allow(clippy::many_single_char_names)]
     #[allow(clippy::too_many_arguments)]
+    #[allow(unsafe_code)]
     pub fn write(
         &self,
         k: Key,
@@ -199,7 +202,9 @@ pub struct TranspositionTable {
 }
 
 // SAFETY: All access to entries is through AtomicU64 with Relaxed ordering.
+#[allow(unsafe_code)]
 unsafe impl Send for TranspositionTable {}
+#[allow(unsafe_code)]
 unsafe impl Sync for TranspositionTable {}
 
 impl TranspositionTable {

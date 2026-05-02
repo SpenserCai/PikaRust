@@ -1,5 +1,8 @@
+#![deny(unsafe_code)]
+
 pub mod evaluate;
 pub mod history;
+mod history_update;
 mod iterdeep;
 pub mod movepick;
 mod qsearch;

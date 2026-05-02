@@ -67,20 +67,24 @@ impl Worker {
         // Static evaluation
         let mut unadjusted_static_eval = VALUE_NONE;
         let mut best_value;
-        let futility_base;
 
-        if in_check {
+        let futility_base = if in_check {
             best_value = -VALUE_INFINITE;
-            futility_base = -VALUE_INFINITE;
-        } else if tt_hit {
-            unadjusted_static_eval = tt_data.eval;
-            if !is_valid(unadjusted_static_eval) {
+            -VALUE_INFINITE
+        } else {
+            let correction_val = self.correction_value(ply);
+            if tt_hit {
+                unadjusted_static_eval = tt_data.eval;
+                if !is_valid(unadjusted_static_eval) {
+                    unadjusted_static_eval = self.evaluate_pos();
+                }
+            } else {
                 unadjusted_static_eval = self.evaluate_pos();
             }
-            best_value = to_corrected_static_eval(unadjusted_static_eval, 0);
+            best_value = to_corrected_static_eval(unadjusted_static_eval, correction_val);
             self.ss_static_evals[ss] = best_value;
 
-            if is_valid(tt_data.value) && !is_decisive(tt_data.value) {
+            if tt_hit && is_valid(tt_data.value) && !is_decisive(tt_data.value) {
                 let bound_ok = if tt_data.value > best_value {
                     tt_data.bound as u8 & Bound::Lower as u8 != 0
                 } else {
@@ -115,35 +119,8 @@ impl Worker {
                 alpha = best_value;
             }
 
-            futility_base = self.ss_static_evals[ss] + 220;
-        } else {
-            unadjusted_static_eval = self.evaluate_pos();
-            best_value = to_corrected_static_eval(unadjusted_static_eval, 0);
-            self.ss_static_evals[ss] = best_value;
-
-            if best_value >= beta {
-                if !is_decisive(best_value) {
-                    best_value = (best_value + beta) / 2;
-                }
-                tt_writer.write(
-                    pos_key,
-                    VALUE_NONE,
-                    false,
-                    Bound::Lower,
-                    DEPTH_UNSEARCHED,
-                    Move::NONE,
-                    unadjusted_static_eval,
-                    self.tt.generation(),
-                );
-                return best_value;
-            }
-
-            if best_value > alpha {
-                alpha = best_value;
-            }
-
-            futility_base = self.ss_static_evals[ss] + 220;
-        }
+            self.ss_static_evals[ss] + 220
+        };
 
         let prev_sq = if ss > 0 && self.ss_current_moves[ss - 1].is_ok() {
             Some(self.ss_current_moves[ss - 1].to_sq())
@@ -151,9 +128,10 @@ impl Worker {
             None
         };
 
-        // Move generation
-        let cont_hist_sentinel = super::history::PieceToHistory::new();
-        let cont_hist: [&super::history::PieceToHistory; 1] = [&cont_hist_sentinel];
+        // Move generation — build contHist from search stack (only ss-1 for qsearch)
+        let cont_hist_refs = self.build_cont_hist_for_movepicker(ply);
+        // qsearch only uses the first entry, but pass all available
+        let cont_hist_slice: Vec<&super::history::PieceToHistory> = cont_hist_refs;
 
         let mut mp = MovePicker::new_main(
             &self.root_pos,
@@ -162,7 +140,7 @@ impl Worker {
             &self.main_history,
             &self.low_ply_history,
             &self.capture_history,
-            &cont_hist,
+            &cont_hist_slice,
             &self.pawn_history,
             ply,
         );

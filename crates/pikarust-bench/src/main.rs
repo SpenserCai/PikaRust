@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::time::Instant;
 
 use pikarust_core::bitboard::ensure_initialized;

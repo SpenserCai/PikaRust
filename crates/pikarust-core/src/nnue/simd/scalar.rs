@@ -52,10 +52,9 @@ impl SimdOps for Scalar {
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        let max_val = 127i32 << shift;
         for (i, &x) in input.iter().enumerate() {
-            let clamped = i64::from(x.clamp(0, max_val));
-            let squared = (clamped * clamped) >> (2 * shift + 7);
+            let v = i64::from(x);
+            let squared = (v * v) >> (2 * shift + 7);
             output[i] = squared.min(127) as u8;
         }
     }
@@ -190,8 +189,36 @@ mod tests {
         let mut output = [0u8; 3];
         Scalar::sqr_clipped_relu(&input, &mut output, 6);
         assert_eq!(output[0], 0);
+        // -10 squared = 100, >> 19 = 0 (small value floors to 0)
         assert_eq!(output[1], 0);
         assert_eq!(output[2], 126);
+    }
+
+    /// Verify that `sqr_clipped_relu` matches C++ Pikafish behavior:
+    /// the raw value is squared first (so negatives become positive),
+    /// then the result is right-shifted and clamped to [0, 127].
+    #[test]
+    fn test_scalar_sqr_clipped_relu_negative_input_matches_cpp() {
+        let shift = 6u32;
+        // -8128 = -127 * 64. C++: (-8128)^2 >> 19 = 66_064_384 >> 19 = 126
+        let input = [-8128i32, 8128, 0, -100, 100];
+        let mut output = [0u8; 5];
+        Scalar::sqr_clipped_relu(&input, &mut output, shift);
+
+        // Negative input: squared first, so sign doesn't matter
+        assert_eq!(
+            output[0], 126,
+            "input -8128 with shift=6 should produce 126"
+        );
+        // Positive input: same magnitude, same result
+        assert_eq!(output[1], 126, "input 8128 with shift=6 should produce 126");
+        // Zero input
+        assert_eq!(output[2], 0, "input 0 should produce 0");
+        // Symmetric: negative and positive of same magnitude must match
+        assert_eq!(
+            output[3], output[4],
+            "sqr_clipped_relu must be symmetric around zero"
+        );
     }
 
     #[test]

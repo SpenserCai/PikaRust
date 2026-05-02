@@ -259,6 +259,7 @@ fn parse_uci_move(pos: &Position, s: &str) -> Option<Move> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{VALUE_MATE_IN_MAX_PLY, VALUE_MATED_IN_MAX_PLY};
 
     #[test]
     fn test_engine_new() {
@@ -430,5 +431,168 @@ mod tests {
     fn test_parse_uci_move_illegal() {
         let pos = Position::from_fen(START_FEN).unwrap();
         assert!(parse_uci_move(&pos, "e0e5").is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Search integration tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_search_depth1_returns_legal_move() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(1),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE, "depth 1 should return a move");
+        assert!(result.best_move.is_ok(), "returned move should be valid");
+
+        // Verify the move is actually legal in the current position
+        let pos = engine.position();
+        assert!(
+            pos.is_legal(result.best_move),
+            "returned move should be legal"
+        );
+    }
+
+    #[test]
+    fn test_search_depth3_returns_valid_move() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(3),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+        assert!(result.depth >= 3, "should reach at least depth 3");
+        assert!(result.nodes > 0, "should search some nodes");
+
+        // Verify legality
+        let pos = engine.position();
+        assert!(pos.is_legal(result.best_move));
+    }
+
+    #[test]
+    fn test_search_depth5_completes() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(5),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+        assert!(result.depth >= 5);
+        assert!(result.nodes > 100, "depth 5 should search many nodes");
+    }
+
+    #[test]
+    fn test_search_midgame_position() {
+        let mut engine = Engine::new().unwrap();
+        let fen = "r1ba1a3/4kn3/2n1b4/pNp1p1p1p/4c4/6P2/P1P2R2P/1CcC5/9/2BAKAB2 w - - 0 1";
+        engine.set_position(fen, &[]).unwrap();
+
+        let limits = SearchLimits {
+            depth: Some(3),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+        assert!(result.best_move.is_ok());
+    }
+
+    #[test]
+    fn test_search_after_moves() {
+        let mut engine = Engine::new().unwrap();
+        engine.set_position(START_FEN, &["b0c2", "b9c7"]).unwrap();
+
+        let limits = SearchLimits {
+            depth: Some(3),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_node_limited() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            nodes: Some(1000),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+        // Node limit is approximate, but should be in the right ballpark
+        assert!(
+            result.nodes < 10000,
+            "node-limited search should not vastly exceed limit, got {}",
+            result.nodes
+        );
+    }
+
+    #[test]
+    fn test_search_consecutive_searches() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(2),
+            ..SearchLimits::default()
+        };
+
+        // First search
+        let r1 = engine.go(&limits);
+        assert_ne!(r1.best_move, Move::NONE);
+
+        // Second search on same position should also work
+        let r2 = engine.go(&limits);
+        assert_ne!(r2.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_new_game_then_search() {
+        let mut engine = Engine::new().unwrap();
+
+        // Search once
+        let limits = SearchLimits {
+            depth: Some(2),
+            ..SearchLimits::default()
+        };
+        let _ = engine.go(&limits);
+
+        // New game, then search again
+        engine.new_game().unwrap();
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_endgame_position() {
+        let mut engine = Engine::new().unwrap();
+        let fen = "5a3/3k5/3aR4/9/5r3/5n3/9/3A1A3/5K3/2BC2B2 w - - 0 1";
+        engine.set_position(fen, &[]).unwrap();
+
+        let limits = SearchLimits {
+            depth: Some(3),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        assert_ne!(result.best_move, Move::NONE);
+    }
+
+    #[test]
+    fn test_search_score_is_bounded() {
+        let mut engine = Engine::new().unwrap();
+        let limits = SearchLimits {
+            depth: Some(5),
+            ..SearchLimits::default()
+        };
+        let result = engine.go(&limits);
+        // Score should be within valid range
+        assert!(
+            result.score > VALUE_MATED_IN_MAX_PLY - 100
+                && result.score < VALUE_MATE_IN_MAX_PLY + 100,
+            "score {} should be in reasonable range",
+            result.score
+        );
     }
 }
