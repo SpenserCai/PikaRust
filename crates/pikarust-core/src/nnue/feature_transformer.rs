@@ -329,8 +329,10 @@ pub fn refresh_threat_accumulator(
     }
 }
 
-/// Evaluate one perspective of the threat accumulator using the Pikafish
-/// `evaluate_side` pattern: `find_last_usable` → `forward_update` OR (refresh + `backward_update`).
+/// Evaluate one perspective of the threat accumulator.
+///
+/// Uses the Pikafish `evaluate_side` pattern: `find_last_usable` →
+/// `forward_update` OR (refresh top + `backward_update`).
 pub fn evaluate_threat_side(
     model: &NnueModel,
     pos: &Position,
@@ -363,19 +365,12 @@ pub fn evaluate_threat_side(
     if stack[last_usable].acc.computed[c] {
         // Case A: forward update from last_usable to top
         for next in (last_usable + 1)..stack_size {
-            let diff_clone = if let DiffType::DirtyThreats(ref dt) = stack[next].diff {
-                Some(dt.clone())
-            } else {
-                None
-            };
-            if let Some(ref dirty) = diff_clone {
+            if let DiffType::DirtyThreats(ref dt) = stack[next].diff {
+                let dirty = dt.clone();
                 let (head, tail) = stack.split_at_mut(next);
                 apply_threat_diff::<true>(
-                    model, perspective, mirror, &head[next - 1].acc, &mut tail[0].acc, dirty, simd,
+                    model, perspective, mirror, &head[next - 1].acc, &mut tail[0].acc, &dirty, simd,
                 );
-            } else {
-                // No diff — full refresh this entry
-                refresh_threat_accumulator_one(model, pos, perspective, &mut stack[next].acc, simd);
             }
         }
     } else {
@@ -383,18 +378,12 @@ pub fn evaluate_threat_side(
         refresh_threat_accumulator_one(model, pos, perspective, &mut stack[stack_size - 1].acc, simd);
 
         for next in (last_usable..(stack_size - 1)).rev() {
-            let diff_clone = if let DiffType::DirtyThreats(ref dt) = stack[next + 1].diff {
-                Some(dt.clone())
-            } else {
-                None
-            };
-            if let Some(ref dirty) = diff_clone {
+            if let DiffType::DirtyThreats(ref dt) = stack[next + 1].diff {
+                let dirty = dt.clone();
                 let (head, tail) = stack.split_at_mut(next + 1);
                 apply_threat_diff::<false>(
-                    model, perspective, mirror, &tail[0].acc, &mut head[next].acc, dirty, simd,
+                    model, perspective, mirror, &tail[0].acc, &mut head[next].acc, &dirty, simd,
                 );
-            } else {
-                refresh_threat_accumulator_one(model, pos, perspective, &mut stack[next].acc, simd);
             }
         }
     }
