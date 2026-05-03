@@ -397,8 +397,19 @@ impl Worker {
             }
         }
 
+        // Pikafish: mirror_before[0] = us perspective, mirror_before[1] = them perspective
+        let them = !us;
+        let mirror_before_us = half_ka_v2_hm::make_feature_bucket(us, &self.root_pos).1;
+        let mirror_before_them = half_ka_v2_hm::make_feature_bucket(them, &self.root_pos).1;
+
         // Do the move
         self.root_pos.do_move(m, gives_check);
+
+        // Pikafish: dp.requires_refresh[c] |= (mirror_before[c] != mirror_after[c])
+        let mirror_after_us = half_ka_v2_hm::make_feature_bucket(us, &self.root_pos).1;
+        let mirror_after_them = half_ka_v2_hm::make_feature_bucket(them, &self.root_pos).1;
+        dirty.requires_refresh[us as usize] |= mirror_before_us != mirror_after_us;
+        dirty.requires_refresh[them as usize] |= mirror_before_them != mirror_after_them;
 
         self.acc_stack.push();
         self.acc_stack.set_psq_diff(dirty);
