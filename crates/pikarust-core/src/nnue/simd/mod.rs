@@ -10,9 +10,9 @@ pub trait SimdOps {
     fn vec_add_i32(a: &mut [i32], b: &[i32]);
     fn vec_sub_i32(a: &mut [i32], b: &[i32]);
 
-    /// Widening add: acc[i] += i16::from(weights[i])
+    /// Widening add: `acc[i] += i16::from(weights[i])`
     fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]);
-    /// Widening sub: acc[i] -= i16::from(weights[i])
+    /// Widening sub: `acc[i] -= i16::from(weights[i])`
     fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]);
 
     fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]);

@@ -227,13 +227,17 @@ fn attacks_bb_with_occ(
 pub fn append_changed_indices(
     perspective: Color,
     mirror: bool,
-    threats: &[(Piece, Piece, Square, Square, bool)],
+    dirty: &crate::nnue::accumulator::DirtyThreats,
     removed: &mut IndexList,
     added: &mut IndexList,
 ) {
-    for &(attacker, victim, from, to, is_add) in threats {
+    for dt in dirty.as_slice() {
+        let attacker = Piece::from_raw(dt.pc_raw());
+        let victim = Piece::from_raw(dt.threatened_pc_raw());
+        let from = Square::from_raw_unchecked(dt.pc_sq_raw());
+        let to = Square::from_raw_unchecked(dt.threatened_sq_raw());
         let index = make_index(perspective, attacker, from, to, victim, mirror);
-        if is_add {
+        if dt.is_add() {
             added.push_if_lt(index, DIMENSIONS);
         } else {
             removed.push_if_lt(index, DIMENSIONS);

@@ -149,6 +149,86 @@ pub fn update_psq_accumulator_incremental(
     }
 }
 
+pub fn update_threat_accumulator_incremental(
+    model: &NnueModel,
+    pos: &Position,
+    prev: &Accumulator,
+    acc: &mut Accumulator,
+    dirty: &super::accumulator::DirtyThreats,
+    simd: &Dispatch,
+) {
+    for &perspective in &Color::ALL {
+        let c = perspective as usize;
+
+        if dirty.requires_refresh[c] || !prev.computed[c] {
+            // Fall back to full refresh
+            let mut active = IndexList::new();
+            full_threats::append_active_indices(pos, perspective, &mut active);
+
+            acc.accumulation[c] = [0i16; TRANSFORMED_DIMS];
+            acc.psqt_accumulation[c] = [0i32; PSQT_BUCKETS];
+
+            for &idx in active.as_slice() {
+                let offset = idx as usize * TRANSFORMED_DIMS;
+                let psqt_offset = idx as usize * PSQT_BUCKETS;
+                if offset + TRANSFORMED_DIMS <= model.ft.threat_weights.len() {
+                    simd.vec_add_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.threat_weights[offset..offset + TRANSFORMED_DIMS],
+                    );
+                }
+                if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
+                    for j in 0..PSQT_BUCKETS {
+                        acc.psqt_accumulation[c][j] += model.ft.threat_psqt_weights[psqt_offset + j];
+                    }
+                }
+            }
+        } else {
+            acc.accumulation[c] = prev.accumulation[c];
+            acc.psqt_accumulation[c] = prev.psqt_accumulation[c];
+
+            let (_, mirror, _) = half_ka_v2_hm::make_feature_bucket(perspective, pos);
+            let mut removed = IndexList::new();
+            let mut added = IndexList::new();
+            full_threats::append_changed_indices(perspective, mirror, dirty, &mut removed, &mut added);
+
+            for &idx in removed.as_slice() {
+                let offset = idx as usize * TRANSFORMED_DIMS;
+                let psqt_offset = idx as usize * PSQT_BUCKETS;
+                if offset + TRANSFORMED_DIMS <= model.ft.threat_weights.len() {
+                    simd.vec_sub_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.threat_weights[offset..offset + TRANSFORMED_DIMS],
+                    );
+                }
+                if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
+                    for j in 0..PSQT_BUCKETS {
+                        acc.psqt_accumulation[c][j] -= model.ft.threat_psqt_weights[psqt_offset + j];
+                    }
+                }
+            }
+
+            for &idx in added.as_slice() {
+                let offset = idx as usize * TRANSFORMED_DIMS;
+                let psqt_offset = idx as usize * PSQT_BUCKETS;
+                if offset + TRANSFORMED_DIMS <= model.ft.threat_weights.len() {
+                    simd.vec_add_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.threat_weights[offset..offset + TRANSFORMED_DIMS],
+                    );
+                }
+                if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
+                    for j in 0..PSQT_BUCKETS {
+                        acc.psqt_accumulation[c][j] += model.ft.threat_psqt_weights[psqt_offset + j];
+                    }
+                }
+            }
+        }
+
+        acc.computed[c] = true;
+    }
+}
+
 pub fn refresh_threat_accumulator(
     model: &NnueModel,
     pos: &Position,

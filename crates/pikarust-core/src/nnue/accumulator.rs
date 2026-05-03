@@ -68,6 +68,17 @@ pub struct DirtyThreat(pub u32);
 
 impl DirtyThreat {
     #[inline]
+    pub const fn new(is_add: bool, pc: Piece, threatened_pc: Piece, pc_sq: Square, threatened_sq: Square) -> Self {
+        Self(
+            ((is_add as u32) << 31)
+                | ((pc.raw() as u32) << 20)
+                | ((threatened_pc.raw() as u32) << 16)
+                | ((threatened_sq.raw() as u32) << 8)
+                | (pc_sq.raw() as u32),
+        )
+    }
+
+    #[inline]
     pub const fn is_add(self) -> bool {
         (self.0 >> 31) != 0
     }
@@ -97,6 +108,7 @@ impl DirtyThreat {
 pub struct DirtyThreats {
     pub count: usize,
     pub threats: [DirtyThreat; MAX_DIRTY_THREATS],
+    pub requires_refresh: [bool; 2],
 }
 
 impl DirtyThreats {
@@ -104,7 +116,20 @@ impl DirtyThreats {
         Self {
             count: 0,
             threats: [DirtyThreat(0); MAX_DIRTY_THREATS],
+            requires_refresh: [false; 2],
         }
+    }
+
+    #[inline]
+    pub fn push(&mut self, dt: DirtyThreat) {
+        debug_assert!(self.count < MAX_DIRTY_THREATS);
+        self.threats[self.count] = dt;
+        self.count += 1;
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[DirtyThreat] {
+        &self.threats[..self.count]
     }
 }
 
@@ -252,6 +277,17 @@ impl AccumulatorStack {
 
     pub fn set_threat_diff(&mut self, dirty: DirtyThreats) {
         self.threat[self.size].diff = DiffType::DirtyThreats(dirty);
+    }
+
+    /// Borrow prev and current threat accumulators simultaneously (split borrow).
+    pub fn prev_and_current_threat_mut(
+        &mut self,
+    ) -> Option<(&AccumulatorState, &mut AccumulatorState)> {
+        if self.size == 0 {
+            return None;
+        }
+        let (head, tail) = self.threat.split_at_mut(self.size);
+        Some((&head[self.size - 1], &mut tail[0]))
     }
 }
 

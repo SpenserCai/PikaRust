@@ -208,8 +208,7 @@ impl Worker {
 
             // Make and search
             self.ss_current_moves[ss] = m;
-            self.push_acc_for_move(m);
-            self.root_pos.do_move(m, gives_check);
+            self.push_acc_for_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_qs");
             self.inc_nodes();
 

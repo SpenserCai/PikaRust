@@ -8,6 +8,6 @@ mod model;
 mod network;
 pub mod simd;
 
-pub use accumulator::{Accumulator, AccumulatorStack, DiffType, DirtyPiece};
+pub use accumulator::{Accumulator, AccumulatorStack, DiffType, DirtyPiece, DirtyThreat, DirtyThreats};
 pub use model::{L2_BIG, NnueModel, WEIGHT_SCALE_BITS};
 pub use network::{Network, make_layer_stack_bucket};

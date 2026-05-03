@@ -56,8 +56,6 @@ impl Position {
 
             new_state.check10 = [0; Color::NUM];
             new_state.rule60 = 0;
-
-            self.remove_piece(to);
         }
 
         k ^= z.psq[pc.index()][from.index()] ^ z.psq[pc.index()][to.index()];
@@ -75,6 +73,10 @@ impl Position {
             }
         }
 
+        // Board updates
+        if captured != Piece::NONE {
+            self.remove_piece(to);
+        }
         self.move_piece(from, to);
 
         new_state.captured_piece = captured;

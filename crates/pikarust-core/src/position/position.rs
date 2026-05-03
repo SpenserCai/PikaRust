@@ -244,6 +244,147 @@ impl Position {
             .wrapping_add(MID_MIRROR_ENCODING[pc.index()][to.index()]);
     }
 
+    /// Atomically replace the piece at `sq` with `new_pc`.
+    /// Used in capture path to match Pikafish's `swap_piece` semantics.
+    pub fn swap_piece(&mut self, sq: Square, new_pc: Piece) {
+        let old = self.board[sq];
+        self.remove_piece(sq);
+        self.put_piece(new_pc, sq);
+        let _ = old; // old is consumed by remove_piece
+    }
+
+    /// Compute threat diffs when a piece `pc` is placed (`put_piece=true`) or
+    /// removed (`put_piece=false`) at square `s`. When `compute_ray` is true,
+    /// discovered threats through sliding/leaping lines are also computed.
+    ///
+    /// Ported from Pikafish `position.cpp:736-886`.
+    pub fn update_piece_threats(
+        &self,
+        pc: Piece,
+        put_piece: bool,
+        s: Square,
+        compute_ray: bool,
+        dts: &mut crate::nnue::DirtyThreats,
+    ) {
+        use crate::bitboard::{
+            PseudoAttacksTable, attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight,
+            attacks_bb_knight_to, attacks_bb_rook, leaper_pass_bb, pawn_attacks_bb,
+            pawn_attacks_to_bb, ray_pass_bb,
+        };
+        use crate::nnue::DirtyThreat;
+
+        let pseudo = PseudoAttacksTable::new();
+        let occupied = self.all_pieces();
+        let r_attacks = attacks_bb_rook(s, occupied);
+        let c_attacks = attacks_bb_cannon(s, occupied);
+
+        // Outgoing threats
+        let threatened = match pc.piece_type() {
+            PieceType::Pawn => pawn_attacks_bb(pc.color(), s),
+            PieceType::Rook => r_attacks,
+            PieceType::Cannon => c_attacks,
+            PieceType::Knight => attacks_bb_knight(s, occupied),
+            PieceType::Bishop => attacks_bb_bishop(s, occupied),
+            PieceType::King => pseudo.get(PieceType::King, s),
+            PieceType::Advisor => pseudo.get(PieceType::Advisor, s),
+        } & occupied;
+
+        let mut bb = threatened;
+        while bb.is_not_empty() {
+            let tsq = bb.pop_lsb();
+            let tpc = self.piece_on(tsq);
+            debug_assert!(tpc != Piece::NONE);
+            dts.push(DirtyThreat::new(put_piece, pc, tpc, s, tsq));
+        }
+
+        // Incoming threats
+        let mut incoming = (pawn_attacks_to_bb(Color::White, s) & self.pieces(Color::White, PieceType::Pawn))
+            | (pawn_attacks_to_bb(Color::Black, s) & self.pieces(Color::Black, PieceType::Pawn))
+            | (attacks_bb_knight_to(s, occupied) & self.pieces_by_type(PieceType::Knight))
+            | (attacks_bb_bishop(s, occupied) & self.pieces_by_type(PieceType::Bishop))
+            | (pseudo.get(PieceType::Advisor, s) & self.pieces_by_type(PieceType::Advisor))
+            | (pseudo.get(PieceType::King, s) & self.pieces_by_type(PieceType::King));
+
+        // Discovered threats (only when compute_ray is true)
+        if compute_ray {
+            // Rooks threatening pieces on the other side of s
+            let mut sliders = r_attacks & self.pieces_by_type(PieceType::Rook);
+            while sliders.is_not_empty() {
+                let slider_sq = sliders.pop_lsb();
+                let slider = self.piece_on(slider_sq);
+                let discovered = ray_pass_bb(slider_sq, s) & r_attacks & occupied;
+                if discovered.is_not_empty() {
+                    let tsq = discovered.lsb();
+                    let tpc = self.piece_on(tsq);
+                    dts.push(DirtyThreat::new(!put_piece, slider, tpc, slider_sq, tsq));
+                }
+                dts.push(DirtyThreat::new(put_piece, slider, pc, slider_sq, s));
+            }
+
+            // Cannons threatening pieces on the other side of s (cannon attack line)
+            let mut sliders = c_attacks & self.pieces_by_type(PieceType::Cannon);
+            while sliders.is_not_empty() {
+                let slider_sq = sliders.pop_lsb();
+                let slider = self.piece_on(slider_sq);
+                // Jumping over the first piece before s
+                let discovered = ray_pass_bb(slider_sq, s) & r_attacks & occupied;
+                if discovered.is_not_empty() {
+                    let tsq = discovered.lsb();
+                    let tpc = self.piece_on(tsq);
+                    dts.push(DirtyThreat::new(!put_piece, slider, tpc, slider_sq, tsq));
+                }
+                dts.push(DirtyThreat::new(put_piece, slider, pc, slider_sq, s));
+            }
+
+            // Cannons on rook attack line through s
+            let mut sliders = r_attacks & self.pieces_by_type(PieceType::Cannon);
+            while sliders.is_not_empty() {
+                let slider_sq = sliders.pop_lsb();
+                let slider = self.piece_on(slider_sq);
+                // Jumping over s
+                let discovered = ray_pass_bb(slider_sq, s) & r_attacks & occupied;
+                if discovered.is_not_empty() {
+                    let tsq = discovered.lsb();
+                    let tpc = self.piece_on(tsq);
+                    dts.push(DirtyThreat::new(put_piece, slider, tpc, slider_sq, tsq));
+                }
+                // Jumping over the first piece after s
+                let discovered2 = ray_pass_bb(slider_sq, s) & c_attacks & occupied;
+                if discovered2.is_not_empty() {
+                    let tsq = discovered2.lsb();
+                    let tpc = self.piece_on(tsq);
+                    dts.push(DirtyThreat::new(!put_piece, slider, tpc, slider_sq, tsq));
+                }
+            }
+
+            // Knights with s as blocking square, Bishops with s as eye
+            let mut leapers = (pseudo.unconstrained_king(s) & self.pieces_by_type(PieceType::Knight))
+                | (pseudo.unconstrained_advisor(s) & self.pieces_by_type(PieceType::Bishop));
+            while leapers.is_not_empty() {
+                let leaper_sq = leapers.pop_lsb();
+                let leaper = self.piece_on(leaper_sq);
+                let mut discovered = leaper_pass_bb(leaper_sq, s) & occupied;
+                while discovered.is_not_empty() {
+                    let tsq = discovered.pop_lsb();
+                    let tpc = self.piece_on(tsq);
+                    dts.push(DirtyThreat::new(!put_piece, leaper, tpc, leaper_sq, tsq));
+                }
+            }
+        } else {
+            // When not computing ray, add rook/cannon sliders as incoming threats
+            incoming |= (r_attacks & self.pieces_by_type(PieceType::Rook))
+                | (c_attacks & self.pieces_by_type(PieceType::Cannon));
+        }
+
+        // Process all incoming threats
+        while incoming.is_not_empty() {
+            let src_sq = incoming.pop_lsb();
+            let src_pc = self.piece_on(src_sq);
+            debug_assert!(src_pc != Piece::NONE);
+            dts.push(DirtyThreat::new(put_piece, src_pc, pc, src_sq, s));
+        }
+    }
+
     pub fn debug_check_consistency(&self, context: &str) {
         for sq_idx in 0..Square::NUM {
             let sq = Square::from_raw_unchecked(sq_idx as u8);

@@ -321,13 +321,43 @@ impl Worker {
         let threat_computed = self.acc_stack.current_threat().acc.computed[0]
             && self.acc_stack.current_threat().acc.computed[1];
         if !threat_computed {
-            let acc = &mut self.acc_stack.current_threat_mut().acc;
-            crate::nnue::feature_transformer::refresh_threat_accumulator(
-                net.model(),
-                &self.root_pos,
-                acc,
-                net.simd(),
-            );
+            if let Some((prev, current)) = self.acc_stack.prev_and_current_threat_mut() {
+                if prev.acc.computed[0] && prev.acc.computed[1] {
+                    if let DiffType::DirtyThreats(ref dirty) = current.diff {
+                        let dirty_copy = dirty.clone();
+                        crate::nnue::feature_transformer::update_threat_accumulator_incremental(
+                            net.model(),
+                            &self.root_pos,
+                            &prev.acc,
+                            &mut current.acc,
+                            &dirty_copy,
+                            net.simd(),
+                        );
+                    } else {
+                        crate::nnue::feature_transformer::refresh_threat_accumulator(
+                            net.model(),
+                            &self.root_pos,
+                            &mut current.acc,
+                            net.simd(),
+                        );
+                    }
+                } else {
+                    crate::nnue::feature_transformer::refresh_threat_accumulator(
+                        net.model(),
+                        &self.root_pos,
+                        &mut current.acc,
+                        net.simd(),
+                    );
+                }
+            } else {
+                let acc = &mut self.acc_stack.current_threat_mut().acc;
+                crate::nnue::feature_transformer::refresh_threat_accumulator(
+                    net.model(),
+                    &self.root_pos,
+                    acc,
+                    net.simd(),
+                );
+            }
         }
 
         let psq_acc = &self.acc_stack.current_psq().acc;
@@ -348,7 +378,7 @@ impl Worker {
         VALUE_DRAW - 1 + (self.node_count() & 0x2) as Value
     }
 
-    pub fn push_acc_for_move(&mut self, m: Move) {
+    pub fn push_acc_for_move(&mut self, m: Move, gives_check: bool) {
         let from = m.from_sq();
         let to = m.to_sq();
         let pc = self.root_pos.piece_on(from);
@@ -396,6 +426,9 @@ impl Worker {
                 }
             }
         }
+
+        // Do the move
+        self.root_pos.do_move(m, gives_check);
 
         self.acc_stack.push();
         self.acc_stack.set_psq_diff(dirty);
