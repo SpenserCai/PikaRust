@@ -254,26 +254,29 @@ impl Position {
     }
 
     /// Compute threat diffs when a piece `pc` is placed (`put_piece=true`) or
-    /// removed (`put_piece=false`) at square `s`. When `compute_ray` is true,
+    /// removed (`put_piece=false`) at square `s`. When `COMPUTE_RAY` is true,
     /// discovered threats through sliding/leaping lines are also computed.
     ///
+    /// Uses const generic for compile-time specialization, matching Pikafish's
+    /// `template<bool ComputeRay>` pattern.
+    ///
     /// Ported from Pikafish `position.cpp:736-886`.
-    pub fn update_piece_threats(
+    #[inline]
+    pub fn update_piece_threats<const COMPUTE_RAY: bool>(
         &self,
         pc: Piece,
         put_piece: bool,
         s: Square,
-        compute_ray: bool,
         dts: &mut crate::nnue::DirtyThreats,
     ) {
         use crate::bitboard::{
-            PseudoAttacksTable, attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight,
+            attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight,
             attacks_bb_knight_to, attacks_bb_rook, leaper_pass_bb, pawn_attacks_bb,
-            pawn_attacks_to_bb, ray_pass_bb,
+            pawn_attacks_to_bb, pseudo_attacks, ray_pass_bb,
         };
         use crate::nnue::DirtyThreat;
 
-        let pseudo = PseudoAttacksTable::new();
+        let pseudo = pseudo_attacks();
         let occupied = self.all_pieces();
         let r_attacks = attacks_bb_rook(s, occupied);
         let c_attacks = attacks_bb_cannon(s, occupied);
@@ -305,8 +308,7 @@ impl Position {
             | (pseudo.get(PieceType::Advisor, s) & self.pieces_by_type(PieceType::Advisor))
             | (pseudo.get(PieceType::King, s) & self.pieces_by_type(PieceType::King));
 
-        // Discovered threats (only when compute_ray is true)
-        if compute_ray {
+        if COMPUTE_RAY {
             // Rooks threatening pieces on the other side of s
             let mut sliders = r_attacks & self.pieces_by_type(PieceType::Rook);
             while sliders.is_not_empty() {

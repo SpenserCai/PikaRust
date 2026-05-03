@@ -289,6 +289,34 @@ impl AccumulatorStack {
         let (head, tail) = self.threat.split_at_mut(self.size);
         Some((&head[self.size - 1], &mut tail[0]))
     }
+
+    /// Find the last usable threat accumulator for the given perspective.
+    /// Returns the index of either a computed accumulator or a `requires_refresh` boundary.
+    pub fn find_last_usable_threat(&self, perspective: usize) -> usize {
+        let mut idx = self.size;
+        while idx > 0 {
+            idx -= 1;
+            if self.threat[idx].acc.computed[perspective] {
+                return idx;
+            }
+            if let DiffType::DirtyThreats(ref dt) = self.threat[idx].diff {
+                if dt.requires_refresh[perspective] {
+                    return idx;
+                }
+            }
+        }
+        0
+    }
+
+    /// Raw access to the threat accumulator array for forward/backward walks.
+    pub fn threat_stack(&self) -> &[AccumulatorState] {
+        &self.threat[..=self.size]
+    }
+
+    /// Mutable raw access to the threat accumulator array.
+    pub fn threat_stack_mut(&mut self) -> &mut [AccumulatorState] {
+        &mut self.threat[..=self.size]
+    }
 }
 
 #[cfg(test)]

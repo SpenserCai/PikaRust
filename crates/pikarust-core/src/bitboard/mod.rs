@@ -38,8 +38,16 @@ use std::sync::LazyLock;
 
 use crate::types::Square;
 
+static PSEUDO_ATTACKS: LazyLock<PseudoAttacksTable> = LazyLock::new(PseudoAttacksTable::new);
+
+/// Returns a reference to the shared, lazily-initialized pseudo-attacks table.
+#[inline]
+pub fn pseudo_attacks() -> &'static PseudoAttacksTable {
+    &PSEUDO_ATTACKS
+}
+
 static LEAPER_PASS_TABLE: LazyLock<[[Bitboard; Square::NUM]; Square::NUM]> = LazyLock::new(|| {
-    let pseudo = PseudoAttacksTable::new();
+    let pseudo = pseudo_attacks();
     let mut table = [[Bitboard::EMPTY; Square::NUM]; Square::NUM];
     for (s1_idx, row) in table.iter_mut().enumerate() {
         let s1 = Square::from_raw_unchecked(s1_idx as u8);
