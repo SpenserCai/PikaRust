@@ -458,11 +458,8 @@ impl Worker {
             } else {
                 tt_data.bound as u8 & Bound::Upper as u8 != 0
             };
-            if bound_ok
-                && ((cut_node == (tt_data.value >= beta)) || depth > 5)
-                && self.root_pos.rule60_count() < 116
-            {
-                // Phase D: TT cutoff history updates
+            if bound_ok && ((cut_node == (tt_data.value >= beta)) || depth > 5) {
+                // TT cutoff history updates (before rule60 check)
                 if tt_data.tt_move.is_ok() && tt_data.value >= beta {
                     if !tt_capture {
                         let tt_bonus = (108 * depth - 60).min(1433);
@@ -475,7 +472,31 @@ impl Worker {
                         }
                     }
                 }
-                return tt_data.value;
+
+                // Graph history interaction workaround
+                if self.root_pos.rule60_count() < 116 {
+                    if depth >= 7
+                        && tt_data.tt_move.is_ok()
+                        && self.root_pos.pseudo_legal(tt_data.tt_move)
+                        && self.root_pos.is_legal(tt_data.tt_move)
+                        && !is_decisive(tt_data.value)
+                    {
+                        let gives_check = self.root_pos.gives_check(tt_data.tt_move);
+                        self.root_pos.do_move(tt_data.tt_move, gives_check);
+                        let next_key = self.root_pos.key();
+                        let next_probe = self.tt.probe(next_key);
+                        self.root_pos.undo_move(tt_data.tt_move);
+
+                        if !is_valid(next_probe.data.value) {
+                            return tt_data.value;
+                        }
+                        if (tt_data.value >= beta) == (-next_probe.data.value >= beta) {
+                            return tt_data.value;
+                        }
+                    } else {
+                        return tt_data.value;
+                    }
+                }
             }
         }
 
@@ -700,7 +721,12 @@ impl Worker {
             let mut extension: i32 = 0;
 
             let delta = beta - alpha;
-            let r = self.reduction(improving, depth, move_count, delta);
+            let mut r = self.reduction(improving, depth, move_count, delta);
+
+            // Increase reduction for ttPv nodes (before Step 13, affects lmrDepth)
+            if tt_pv {
+                r += 931;
+            }
 
             // === Step 13: Pruning at shallow depths ===
 
@@ -886,7 +912,6 @@ impl Worker {
             }
 
             // All r adjustments (C++ applies these before the LMR/non-LMR branch)
-            let mut r = r;
 
             if tt_pv {
                 r -= 2363
@@ -1028,9 +1053,17 @@ impl Worker {
                 }
             }
 
-            if value > best_value {
+            // Alternative move promotion: pretend equal-value moves just exceed alpha
+            let inc = i32::from(
+                value == best_value
+                    && ply + 2 >= self.root_depth
+                    && (self.node_count() as i32).trailing_zeros() >= 4
+                    && !is_win(value.abs() + 1),
+            );
+
+            if value + inc > best_value {
                 best_value = value;
-                if value > alpha {
+                if value + inc > alpha {
                     best_move = m;
                     if value >= beta {
                         // Phase C: cutoffCnt condition fix

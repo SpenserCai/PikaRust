@@ -39,9 +39,9 @@ impl E2eConfig {
             default_timeout: Duration::from_secs(10),
             search_timeout: Duration::from_secs(60),
             max_game_moves: 200,
-            equiv_depth: 5,
-            self_play_depth: 4,
-            cross_engine_depth: 6,
+            equiv_depth: 8,
+            self_play_depth: 6,
+            cross_engine_depth: 8,
         }
     }
 }
