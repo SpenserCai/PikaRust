@@ -4,6 +4,17 @@ use super::movegen::{GenType, generate};
 use super::position::Position;
 use super::state::StateInfo;
 
+/// Return type for `rule_judge`, distinguishing definitive from 2-fold results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleJudgeResult {
+    /// No repetition detected.
+    None,
+    /// Definitive result (3-fold / draw / bloom-filter-confirmed 2-fold).
+    Definitive(Value),
+    /// 2-fold non-definitive result (first detection of 2-fold mate/mated).
+    TwoFold(Value),
+}
+
 impl Position {
     fn state_at(&self, steps_back: usize) -> Option<&StateInfo> {
         if steps_back == 0 {
@@ -19,16 +30,21 @@ impl Position {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn rule_judge(&mut self, ply: i32) -> Option<Value> {
+    pub fn rule_judge(&mut self, ply: i32) -> RuleJudgeResult {
         let extra_checks = i32::from((self.state.check10[Color::White] - 10).max(0))
             + i32::from((self.state.check10[Color::Black] - 10).max(0));
         let end = (self.state.rule60 + extra_checks).min(self.state.plies_from_null);
+
+        let mut two_fold_result: Option<Value> = None;
 
         if end >= 4 && self.bloom_filter.count(self.state.key) >= 1 {
             let mut cnt = 0;
 
             let Some(st_2) = self.state_at(2) else {
-                return self.check_rule60_and_material(ply);
+                return self.check_rule60_and_material(ply).map_or(
+                    RuleJudgeResult::None,
+                    RuleJudgeResult::Definitive,
+                );
             };
             let checkers_2 = st_2.checkers_bb;
 
@@ -69,7 +85,7 @@ impl Position {
                         };
 
                         if result == VALUE_DRAW || cnt == 2 {
-                            return Some(result);
+                            return RuleJudgeResult::Definitive(result);
                         }
 
                         if self.bloom_filter.count(self.state.key) <= 1 {
@@ -90,10 +106,11 @@ impl Position {
                                         }
                                     }
                                     if !found_repeat {
-                                        return Some(result);
+                                        return RuleJudgeResult::Definitive(result);
                                     }
                                 }
                             }
+                            two_fold_result = Some(result);
                             break;
                         }
                     }
@@ -110,7 +127,18 @@ impl Position {
             }
         }
 
-        self.check_rule60_and_material(ply)
+        self.check_rule60_and_material_rj(ply, two_fold_result)
+    }
+
+    fn check_rule60_and_material_rj(
+        &mut self,
+        ply: i32,
+        two_fold_result: Option<Value>,
+    ) -> RuleJudgeResult {
+        self.check_rule60_and_material(ply).map_or_else(
+            || two_fold_result.map_or(RuleJudgeResult::None, RuleJudgeResult::TwoFold),
+            RuleJudgeResult::Definitive,
+        )
     }
 
     fn check_rule60_and_material(&mut self, ply: i32) -> Option<Value> {
@@ -229,6 +257,7 @@ enum DrawLevel {
 
 #[cfg(test)]
 mod tests {
+    use super::RuleJudgeResult;
     use crate::position::Position;
     use crate::types::{Move, Square, VALUE_DRAW, VALUE_MATE};
 
@@ -238,7 +267,7 @@ mod tests {
             "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1",
         )
         .expect("valid fen");
-        assert_eq!(pos.rule_judge(0), Option::None);
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::None);
     }
 
     #[test]
@@ -264,50 +293,36 @@ mod tests {
             pos.do_move(*m, gc);
         }
 
-        let result = pos.rule_judge(0);
-        assert!(result.is_some(), "should detect repetition");
-        assert_eq!(result, Some(VALUE_DRAW), "repeated position should be draw");
+        assert_eq!(
+            pos.rule_judge(0),
+            RuleJudgeResult::Definitive(VALUE_DRAW),
+            "repeated position should be draw"
+        );
     }
 
     #[test]
     fn test_rule_judge_insufficient_material_kings_only() {
         let mut pos = Position::from_fen("4k4/9/9/9/9/9/9/9/9/4K4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(result, Some(VALUE_DRAW), "kings only should be draw");
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::Definitive(VALUE_DRAW));
     }
 
     #[test]
     fn test_rule_judge_insufficient_material_kings_and_advisors() {
         let mut pos = Position::from_fen("4ka3/9/9/9/9/9/9/9/9/3AK4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(
-            result,
-            Some(VALUE_DRAW),
-            "kings + advisors only should be draw"
-        );
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::Definitive(VALUE_DRAW));
     }
 
     #[test]
     fn test_rule_judge_insufficient_material_kings_and_bishops() {
         let mut pos =
             Position::from_fen("4k4/9/3b5/9/9/9/9/2B6/9/4K4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(
-            result,
-            Some(VALUE_DRAW),
-            "kings + bishops only should be draw"
-        );
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::Definitive(VALUE_DRAW));
     }
 
     #[test]
     fn test_rule_judge_sufficient_material_with_rook() {
         let mut pos = Position::from_fen("4k4/9/9/9/9/9/9/9/9/3RK4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(
-            result,
-            Option::None,
-            "rook present means sufficient material"
-        );
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::None);
     }
 
     #[test]
@@ -316,31 +331,19 @@ mod tests {
             "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 120 1",
         )
         .expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert!(result.is_some(), "rule60 >= 120 should trigger draw");
-        assert_eq!(result, Some(VALUE_DRAW));
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::Definitive(VALUE_DRAW));
     }
 
     #[test]
     fn test_rule_judge_no_draw_with_pawns() {
         let mut pos = Position::from_fen("4k4/9/9/9/9/9/4P4/9/9/4K4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(
-            result,
-            Option::None,
-            "pawn present means no insufficient material draw"
-        );
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::None);
     }
 
     #[test]
     fn test_rule_judge_single_cannon_no_advisors_draw() {
         let mut pos = Position::from_fen("4k4/9/9/9/9/9/9/2C6/9/4K4 w - - 0 1").expect("valid fen");
-        let result = pos.rule_judge(0);
-        assert_eq!(
-            result,
-            Some(VALUE_DRAW),
-            "single cannon vs king should be draw"
-        );
+        assert_eq!(pos.rule_judge(0), RuleJudgeResult::Definitive(VALUE_DRAW));
     }
 
     #[test]
@@ -365,11 +368,16 @@ mod tests {
         }
 
         let result = pos.rule_judge(0);
-        if let Some(v) = result {
-            assert!(
-                v >= VALUE_MATE - 300 || v <= -VALUE_MATE + 300 || v == VALUE_DRAW,
-                "perpetual check should return mate penalty or draw, got {v}"
-            );
+        match result {
+            RuleJudgeResult::Definitive(v) | RuleJudgeResult::TwoFold(v) => {
+                assert!(
+                    v >= VALUE_MATE - 300 || v <= -VALUE_MATE + 300 || v == VALUE_DRAW,
+                    "perpetual check should return mate penalty or draw, got {v}"
+                );
+            }
+            RuleJudgeResult::None => {
+                // Acceptable — depends on bloom filter state
+            }
         }
     }
 }

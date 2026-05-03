@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use crate::position::rule_judge::RuleJudgeResult;
 use crate::types::{
     Bound, DEPTH_UNSEARCHED, Depth, MAX_PLY, Move, PIECE_VALUE, PieceType, VALUE_DRAW,
     VALUE_INFINITE, VALUE_MATE_IN_MAX_PLY, VALUE_MATED_IN_MAX_PLY, VALUE_NONE, VALUE_ZERO, Value,
@@ -269,12 +270,22 @@ impl Worker {
         }
 
         if !ROOT {
-            if let Some(result) = self.root_pos.rule_judge(ply) {
-                return if result == VALUE_DRAW {
-                    self.value_draw()
-                } else {
-                    result
-                };
+            match self.root_pos.rule_judge(ply) {
+                RuleJudgeResult::Definitive(result) => {
+                    return if result == VALUE_DRAW {
+                        self.value_draw()
+                    } else {
+                        result
+                    };
+                }
+                RuleJudgeResult::TwoFold(result) => {
+                    if result > VALUE_DRAW {
+                        alpha = alpha.max(VALUE_DRAW - 1);
+                    } else {
+                        beta = beta.min(VALUE_DRAW + 1);
+                    }
+                }
+                RuleJudgeResult::None => {}
             }
 
             if self.stop.load(Ordering::Relaxed) || ply >= MAX_PLY {

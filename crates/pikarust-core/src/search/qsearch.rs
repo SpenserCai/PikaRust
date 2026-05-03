@@ -1,3 +1,4 @@
+use crate::position::rule_judge::RuleJudgeResult;
 use crate::position::{GenType, generate};
 use crate::types::{
     Bound, DEPTH_QS, DEPTH_UNSEARCHED, MAX_PLY, Move, PIECE_VALUE, VALUE_DRAW, VALUE_INFINITE,
@@ -9,7 +10,7 @@ use super::search::{Worker, to_corrected_static_eval, value_from_tt, value_to_tt
 
 impl Worker {
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-    pub fn qsearch(&mut self, ply: i32, mut alpha: Value, beta: Value, pv_node: bool) -> Value {
+    pub fn qsearch(&mut self, ply: i32, mut alpha: Value, mut beta: Value, pv_node: bool) -> Value {
         let ss = self.ss_idx(ply);
 
         let mut best_move = Move::NONE;
@@ -22,8 +23,21 @@ impl Worker {
         }
 
         // Check for repetition or max ply
-        if let Some(result) = self.root_pos.rule_judge(ply) {
-            return result;
+        match self.root_pos.rule_judge(ply) {
+            RuleJudgeResult::Definitive(result) => {
+                return result;
+            }
+            RuleJudgeResult::TwoFold(result) => {
+                if result > VALUE_DRAW {
+                    alpha = alpha.max(VALUE_DRAW);
+                } else {
+                    beta = beta.min(VALUE_DRAW);
+                }
+                if alpha >= beta {
+                    return alpha;
+                }
+            }
+            RuleJudgeResult::None => {}
         }
 
         if ply >= MAX_PLY {

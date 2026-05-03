@@ -8,7 +8,7 @@ mod movegen;
 pub mod perft;
 #[allow(clippy::module_inception)]
 mod position;
-mod rule_judge;
+pub mod rule_judge;
 mod state;
 mod zobrist;
 

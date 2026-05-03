@@ -1,3 +1,4 @@
+use pikarust_core::position::rule_judge::RuleJudgeResult;
 use pikarust_core::position::{GenType, Position, generate};
 use pikarust_core::types::{File, Move, Rank, Square, VALUE_DRAW};
 
@@ -63,7 +64,7 @@ impl GameState {
             });
         }
 
-        if let Some(value) = self.position.rule_judge(0) {
+        if let RuleJudgeResult::Definitive(value) = self.position.rule_judge(0) {
             if value == VALUE_DRAW {
                 let reason = if self.position.rule60_count() >= 120 {
                     DrawReason::SixtyMoveRule
