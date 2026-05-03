@@ -638,7 +638,7 @@ impl TTMoveHistory {
     }
 
     pub fn update(&mut self, bonus: i32) {
-        update_entry(&mut self.value, bonus, 7183);
+        update_entry(&mut self.value, bonus, 8192);
     }
 
     pub const fn reset(&mut self) {

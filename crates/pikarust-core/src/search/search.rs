@@ -233,10 +233,10 @@ impl Worker {
         self.capture_history.fill(-607);
         self.low_ply_history.fill(0);
         self.continuation_history.fill(-436);
-        self.pawn_history.fill(0);
+        self.pawn_history.fill(-1247);
         self.tt_move_history.reset();
         self.correction_history.clear();
-        self.continuation_correction_history.fill(0);
+        self.continuation_correction_history.fill(7);
         self.init_reductions();
     }
 

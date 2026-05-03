@@ -990,7 +990,12 @@ impl Worker {
 
             // PV search
             if pv_node && (move_count == 1 || value > alpha) {
-                if m == tt_data.tt_move && tt_data.depth > 1 {
+                if m == tt_data.tt_move
+                    && ((is_valid(tt_data.value)
+                        && is_decisive(tt_data.value)
+                        && tt_data.depth > 0)
+                        || tt_data.depth > 1)
+                {
                     new_depth = new_depth.max(1);
                 }
                 value = -self.ab_search::<false>(ply + 1, -beta, -alpha, new_depth, false);
