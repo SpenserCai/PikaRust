@@ -17,6 +17,18 @@ impl SimdOps for Scalar {
         }
     }
 
+    fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        for (a, &w) in acc.iter_mut().zip(weights.iter()) {
+            *a += i16::from(w);
+        }
+    }
+
+    fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        for (a, &w) in acc.iter_mut().zip(weights.iter()) {
+            *a -= i16::from(w);
+        }
+    }
+
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
         debug_assert_eq!(a.len(), b.len());
         for (x, &y) in a.iter_mut().zip(b.iter()) {

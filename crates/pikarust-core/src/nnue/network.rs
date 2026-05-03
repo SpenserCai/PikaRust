@@ -72,6 +72,10 @@ impl Network {
         &self.model
     }
 
+    pub const fn simd(&self) -> &Dispatch {
+        &self.simd
+    }
+
     pub fn evaluate(
         &self,
         psq_acc: &[[i16; TRANSFORMED_DIMS]; 2],

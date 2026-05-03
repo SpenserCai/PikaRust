@@ -54,6 +54,53 @@ impl SimdOps for Neon {
         }
     }
 
+    fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        let len = acc.len().min(weights.len());
+        let chunks = len / 16;
+
+        // SAFETY: NEON is always available on aarch64. We process 16 elements
+        // per iteration: load 16×i8, widening-add to two 8×i16 vectors.
+        unsafe {
+            let acc_ptr = acc.as_mut_ptr();
+            let w_ptr = weights.as_ptr();
+            for i in 0..chunks {
+                let off = i * 16;
+                let w8 = vld1q_s8(w_ptr.add(off));
+                let a_lo = vld1q_s16(acc_ptr.add(off));
+                let a_hi = vld1q_s16(acc_ptr.add(off + 8));
+                vst1q_s16(acc_ptr.add(off), vaddw_s8(a_lo, vget_low_s8(w8)));
+                vst1q_s16(acc_ptr.add(off + 8), vaddw_high_s8(a_hi, w8));
+            }
+        }
+
+        for i in (chunks * 16)..len {
+            acc[i] += i16::from(weights[i]);
+        }
+    }
+
+    fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        let len = acc.len().min(weights.len());
+        let chunks = len / 16;
+
+        // SAFETY: Same as vec_add_i16_widening but with vsubw_s8.
+        unsafe {
+            let acc_ptr = acc.as_mut_ptr();
+            let w_ptr = weights.as_ptr();
+            for i in 0..chunks {
+                let off = i * 16;
+                let w8 = vld1q_s8(w_ptr.add(off));
+                let a_lo = vld1q_s16(acc_ptr.add(off));
+                let a_hi = vld1q_s16(acc_ptr.add(off + 8));
+                vst1q_s16(acc_ptr.add(off), vsubw_s8(a_lo, vget_low_s8(w8)));
+                vst1q_s16(acc_ptr.add(off + 8), vsubw_high_s8(a_hi, w8));
+            }
+        }
+
+        for i in (chunks * 16)..len {
+            acc[i] -= i16::from(weights[i]);
+        }
+    }
+
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
         debug_assert_eq!(a.len(), b.len());
         let len = a.len();

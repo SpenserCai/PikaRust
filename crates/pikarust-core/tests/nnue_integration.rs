@@ -18,8 +18,8 @@ fn load_network() -> Option<Network> {
 fn eval_position(net: &Network, pos: &Position) -> (i32, i32) {
     let mut psq_acc = Accumulator::new();
     let mut threat_acc = Accumulator::new();
-    refresh_psq_accumulator(net.model(), pos, &mut psq_acc);
-    refresh_threat_accumulator(net.model(), pos, &mut threat_acc);
+    refresh_psq_accumulator(net.model(), pos, &mut psq_acc, net.simd());
+    refresh_threat_accumulator(net.model(), pos, &mut threat_acc, net.simd());
     net.evaluate(
         &psq_acc.accumulation,
         &threat_acc.accumulation,
@@ -90,8 +90,8 @@ fn test_accumulator_snapshot_startpos() {
     let pos = Position::start_pos().expect("start_pos");
     let mut psq_acc = Accumulator::new();
     let mut threat_acc = Accumulator::new();
-    refresh_psq_accumulator(net.model(), &pos, &mut psq_acc);
-    refresh_threat_accumulator(net.model(), &pos, &mut threat_acc);
+    refresh_psq_accumulator(net.model(), &pos, &mut psq_acc, net.simd());
+    refresh_threat_accumulator(net.model(), &pos, &mut threat_acc, net.simd());
 
     assert_eq!(psq_acc.accumulation[0][0..4], [2, -84, 28, 187]);
     assert_eq!(psq_acc.accumulation[1][0..4], [2, -84, 28, 187]);
@@ -111,8 +111,8 @@ fn test_full_refresh_deterministic() {
 
     let mut acc1 = Accumulator::new();
     let mut acc2 = Accumulator::new();
-    refresh_psq_accumulator(net.model(), &pos, &mut acc1);
-    refresh_psq_accumulator(net.model(), &pos, &mut acc2);
+    refresh_psq_accumulator(net.model(), &pos, &mut acc1, net.simd());
+    refresh_psq_accumulator(net.model(), &pos, &mut acc2, net.simd());
 
     assert_eq!(
         acc1.accumulation[0][..],
@@ -258,8 +258,8 @@ fn test_affine_propagate_with_real_model_weights() {
     let pos = Position::from_fen(fen).expect("parse fen");
     let mut psq_acc = Accumulator::new();
     let mut threat_acc = Accumulator::new();
-    refresh_psq_accumulator(net.model(), &pos, &mut psq_acc);
-    refresh_threat_accumulator(net.model(), &pos, &mut threat_acc);
+    refresh_psq_accumulator(net.model(), &pos, &mut psq_acc, net.simd());
+    refresh_threat_accumulator(net.model(), &pos, &mut threat_acc, net.simd());
 
     let scalar_d = Dispatch::with_backend(SimdBackend::Scalar);
     let neon_d = Dispatch::new();

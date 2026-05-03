@@ -10,6 +10,11 @@ pub trait SimdOps {
     fn vec_add_i32(a: &mut [i32], b: &[i32]);
     fn vec_sub_i32(a: &mut [i32], b: &[i32]);
 
+    /// Widening add: acc[i] += i16::from(weights[i])
+    fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]);
+    /// Widening sub: acc[i] -= i16::from(weights[i])
+    fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]);
+
     fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]);
 
     fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32);
@@ -137,6 +142,16 @@ impl Dispatch {
     #[inline]
     pub fn vec_sub_i16(&self, a: &mut [i16], b: &[i16]) {
         dispatch!(self.backend, vec_sub_i16, a, b);
+    }
+
+    #[inline]
+    pub fn vec_add_i16_widening(&self, acc: &mut [i16], weights: &[i8]) {
+        dispatch!(self.backend, vec_add_i16_widening, acc, weights);
+    }
+
+    #[inline]
+    pub fn vec_sub_i16_widening(&self, acc: &mut [i16], weights: &[i8]) {
+        dispatch!(self.backend, vec_sub_i16_widening, acc, weights);
     }
 
     #[inline]

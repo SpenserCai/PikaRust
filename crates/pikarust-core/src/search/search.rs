@@ -289,12 +289,14 @@ impl Worker {
                             &prev.acc,
                             &mut current.acc,
                             &dirty_copy,
+                            net.simd(),
                         );
                     } else {
                         crate::nnue::feature_transformer::refresh_psq_accumulator(
                             net.model(),
                             &self.root_pos,
                             &mut current.acc,
+                            net.simd(),
                         );
                     }
                 } else {
@@ -302,6 +304,7 @@ impl Worker {
                         net.model(),
                         &self.root_pos,
                         &mut current.acc,
+                        net.simd(),
                     );
                 }
             } else {
@@ -310,6 +313,7 @@ impl Worker {
                     net.model(),
                     &self.root_pos,
                     acc,
+                    net.simd(),
                 );
             }
         }
@@ -322,6 +326,7 @@ impl Worker {
                 net.model(),
                 &self.root_pos,
                 acc,
+                net.simd(),
             );
         }
 

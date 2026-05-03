@@ -6,8 +6,14 @@ use super::features::IndexList;
 use super::features::full_threats;
 use super::features::half_ka_v2_hm;
 use super::model::{NnueModel, PSQT_BUCKETS, TRANSFORMED_DIMS};
+use super::simd::Dispatch;
 
-pub fn refresh_psq_accumulator(model: &NnueModel, pos: &Position, acc: &mut Accumulator) {
+pub fn refresh_psq_accumulator(
+    model: &NnueModel,
+    pos: &Position,
+    acc: &mut Accumulator,
+    simd: &Dispatch,
+) {
     for &perspective in &Color::ALL {
         let mut active = IndexList::new();
         half_ka_v2_hm::append_active_indices(pos, perspective, &mut active);
@@ -21,9 +27,10 @@ pub fn refresh_psq_accumulator(model: &NnueModel, pos: &Position, acc: &mut Accu
             let psqt_offset = idx as usize * PSQT_BUCKETS;
 
             if offset + TRANSFORMED_DIMS <= model.ft.weights.len() {
-                for j in 0..TRANSFORMED_DIMS {
-                    acc.accumulation[c][j] += i16::from(model.ft.weights[offset + j]);
-                }
+                simd.vec_add_i16_widening(
+                    &mut acc.accumulation[c],
+                    &model.ft.weights[offset..offset + TRANSFORMED_DIMS],
+                );
             }
 
             if psqt_offset + PSQT_BUCKETS <= model.ft.psqt_weights.len() {
@@ -43,6 +50,7 @@ pub fn update_psq_accumulator_incremental(
     prev: &Accumulator,
     acc: &mut Accumulator,
     dirty: &DirtyPiece,
+    simd: &Dispatch,
 ) {
     for &perspective in &Color::ALL {
         let c = perspective as usize;
@@ -59,9 +67,10 @@ pub fn update_psq_accumulator_incremental(
                 let psqt_offset = idx as usize * PSQT_BUCKETS;
 
                 if offset + TRANSFORMED_DIMS <= model.ft.weights.len() {
-                    for j in 0..TRANSFORMED_DIMS {
-                        acc.accumulation[c][j] += i16::from(model.ft.weights[offset + j]);
-                    }
+                    simd.vec_add_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.weights[offset..offset + TRANSFORMED_DIMS],
+                    );
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
@@ -106,9 +115,10 @@ pub fn update_psq_accumulator_incremental(
                 let psqt_offset = idx as usize * PSQT_BUCKETS;
 
                 if offset + TRANSFORMED_DIMS <= model.ft.weights.len() {
-                    for j in 0..TRANSFORMED_DIMS {
-                        acc.accumulation[c][j] -= i16::from(model.ft.weights[offset + j]);
-                    }
+                    simd.vec_sub_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.weights[offset..offset + TRANSFORMED_DIMS],
+                    );
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
@@ -122,9 +132,10 @@ pub fn update_psq_accumulator_incremental(
                 let psqt_offset = idx as usize * PSQT_BUCKETS;
 
                 if offset + TRANSFORMED_DIMS <= model.ft.weights.len() {
-                    for j in 0..TRANSFORMED_DIMS {
-                        acc.accumulation[c][j] += i16::from(model.ft.weights[offset + j]);
-                    }
+                    simd.vec_add_i16_widening(
+                        &mut acc.accumulation[c],
+                        &model.ft.weights[offset..offset + TRANSFORMED_DIMS],
+                    );
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
@@ -138,7 +149,12 @@ pub fn update_psq_accumulator_incremental(
     }
 }
 
-pub fn refresh_threat_accumulator(model: &NnueModel, pos: &Position, acc: &mut Accumulator) {
+pub fn refresh_threat_accumulator(
+    model: &NnueModel,
+    pos: &Position,
+    acc: &mut Accumulator,
+    simd: &Dispatch,
+) {
     for &perspective in &Color::ALL {
         let mut active = IndexList::new();
         full_threats::append_active_indices(pos, perspective, &mut active);
@@ -152,9 +168,10 @@ pub fn refresh_threat_accumulator(model: &NnueModel, pos: &Position, acc: &mut A
             let psqt_offset = idx as usize * PSQT_BUCKETS;
 
             if offset + TRANSFORMED_DIMS <= model.ft.threat_weights.len() {
-                for j in 0..TRANSFORMED_DIMS {
-                    acc.accumulation[c][j] += i16::from(model.ft.threat_weights[offset + j]);
-                }
+                simd.vec_add_i16_widening(
+                    &mut acc.accumulation[c],
+                    &model.ft.threat_weights[offset..offset + TRANSFORMED_DIMS],
+                );
             }
 
             if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
@@ -174,6 +191,10 @@ mod tests {
     use crate::position::{GenType, generate};
     use crate::types::PieceType;
 
+    fn test_simd() -> Dispatch {
+        Dispatch::new()
+    }
+
     #[test]
     fn test_refresh_psq_accumulator_start_pos() {
         let model_path = std::path::Path::new("../../models/pikafish.nnue");
@@ -182,8 +203,9 @@ mod tests {
         }
         let model = NnueModel::load(model_path).expect("model load");
         let pos = Position::start_pos().expect("start_pos");
+        let simd = test_simd();
         let mut acc = Accumulator::new();
-        refresh_psq_accumulator(&model, &pos, &mut acc);
+        refresh_psq_accumulator(&model, &pos, &mut acc, &simd);
         assert!(acc.computed[0]);
         assert!(acc.computed[1]);
         let has_nonzero = acc.accumulation[0].iter().any(|&v| v != 0);
@@ -198,8 +220,9 @@ mod tests {
         }
         let model = NnueModel::load(model_path).expect("model load");
         let pos = Position::start_pos().expect("start_pos");
+        let simd = test_simd();
         let mut acc = Accumulator::new();
-        refresh_threat_accumulator(&model, &pos, &mut acc);
+        refresh_threat_accumulator(&model, &pos, &mut acc, &simd);
         assert!(acc.computed[0]);
         assert!(acc.computed[1]);
         let has_nonzero = acc.accumulation[0].iter().any(|&v| v != 0);
@@ -218,8 +241,9 @@ mod tests {
         let model = NnueModel::load(model_path).expect("model load");
         let mut pos = Position::start_pos().expect("start_pos");
 
+        let simd = test_simd();
         let mut prev_acc = Accumulator::new();
-        refresh_psq_accumulator(&model, &pos, &mut prev_acc);
+        refresh_psq_accumulator(&model, &pos, &mut prev_acc, &simd);
 
         let ml = generate(&pos, GenType::Legal);
         for i in 0..ml.len() {
@@ -249,10 +273,10 @@ mod tests {
             pos.do_move(m, gives_check);
 
             let mut inc_acc = Accumulator::new();
-            update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty);
+            update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty, &simd);
 
             let mut ref_acc = Accumulator::new();
-            refresh_psq_accumulator(&model, &pos, &mut ref_acc);
+            refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
 
             for c in 0..2 {
                 assert_eq!(
@@ -285,8 +309,9 @@ mod tests {
 
         for fen in &fens {
             let mut pos = Position::from_fen(fen).expect("parse fen");
+            let simd = test_simd();
             let mut prev_acc = Accumulator::new();
-            refresh_psq_accumulator(&model, &pos, &mut prev_acc);
+            refresh_psq_accumulator(&model, &pos, &mut prev_acc, &simd);
 
             let ml = generate(&pos, GenType::Legal);
             for i in 0..ml.len() {
@@ -338,10 +363,10 @@ mod tests {
                 pos.do_move(m, gives_check);
 
                 let mut inc_acc = Accumulator::new();
-                update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty);
+                update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty, &simd);
 
                 let mut ref_acc = Accumulator::new();
-                refresh_psq_accumulator(&model, &pos, &mut ref_acc);
+                refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
 
                 for c in 0..2 {
                     assert_eq!(

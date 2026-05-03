@@ -52,6 +52,51 @@ impl SimdOps for Avx2 {
         }
     }
 
+    fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        let len = acc.len().min(weights.len());
+        let chunks = len / 16;
+
+        // SAFETY: Caller guarantees AVX2. Load 16×i8, sign-extend to 16×i16,
+        // add to accumulator.
+        unsafe {
+            let acc_ptr = acc.as_mut_ptr();
+            let w_ptr = weights.as_ptr();
+            for i in 0..chunks {
+                let off = i * 16;
+                let w8 = _mm_loadu_si128(w_ptr.add(off).cast());
+                let w16 = _mm256_cvtepi8_epi16(w8);
+                let a = _mm256_loadu_si256(acc_ptr.add(off).cast());
+                _mm256_storeu_si256(acc_ptr.add(off).cast(), _mm256_add_epi16(a, w16));
+            }
+        }
+
+        for i in (chunks * 16)..len {
+            acc[i] += i16::from(weights[i]);
+        }
+    }
+
+    fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        let len = acc.len().min(weights.len());
+        let chunks = len / 16;
+
+        // SAFETY: Same as vec_add_i16_widening but with sub.
+        unsafe {
+            let acc_ptr = acc.as_mut_ptr();
+            let w_ptr = weights.as_ptr();
+            for i in 0..chunks {
+                let off = i * 16;
+                let w8 = _mm_loadu_si128(w_ptr.add(off).cast());
+                let w16 = _mm256_cvtepi8_epi16(w8);
+                let a = _mm256_loadu_si256(acc_ptr.add(off).cast());
+                _mm256_storeu_si256(acc_ptr.add(off).cast(), _mm256_sub_epi16(a, w16));
+            }
+        }
+
+        for i in (chunks * 16)..len {
+            acc[i] -= i16::from(weights[i]);
+        }
+    }
+
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
         debug_assert_eq!(a.len(), b.len());
         let len = a.len();
