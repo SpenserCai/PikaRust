@@ -96,6 +96,17 @@ impl NnueModel {
     }
 }
 
+/// Transpose weight matrix from file order `[out_dim][in_dim]` to SIMD order `[in_dim][out_dim]`.
+fn transpose_weights(src: &[i8], out_dim: usize, in_dim: usize) -> Box<[i8]> {
+    let mut dst = vec![0i8; out_dim * in_dim];
+    for o in 0..out_dim {
+        for i in 0..in_dim {
+            dst[i * out_dim + o] = src[o * in_dim + i];
+        }
+    }
+    dst.into_boxed_slice()
+}
+
 fn read_feature_transformer(
     data: &[u8],
     pos: &mut usize,
@@ -135,19 +146,21 @@ fn read_feature_transformer(
 fn read_layer_stack(data: &[u8], pos: &mut usize) -> Result<LayerStackWeights, NnueError> {
     let _arch_hash = read_u32(data, pos)?;
 
-    // fc_0: biases[32] as i32, weights[32*1024] as i8
+    // fc_0: biases[32] as i32, weights[32*1024] as i8 (file: output-major)
     let mut fc0_biases = Box::new([0i32; FC0_OUTPUTS]);
     read_i32_slice(data, pos, fc0_biases.as_mut_slice())?;
     let fc0_weight_count = FC0_OUTPUTS * TRANSFORMED_DIMS;
-    let mut fc0_weights = vec![0i8; fc0_weight_count].into_boxed_slice();
-    read_i8_slice(data, pos, &mut fc0_weights)?;
+    let mut fc0_weights_raw = vec![0i8; fc0_weight_count];
+    read_i8_slice(data, pos, &mut fc0_weights_raw)?;
+    let fc0_weights = transpose_weights(&fc0_weights_raw, FC0_OUTPUTS, TRANSFORMED_DIMS);
 
-    // fc_1: biases[32] as i32, weights[32*64] as i8 (input padded from 62 to 64)
+    // fc_1: biases[32] as i32, weights[32*64] as i8 (file: output-major, padded input)
     let mut fc1_biases = Box::new([0i32; L3_BIG]);
     read_i32_slice(data, pos, fc1_biases.as_mut_slice())?;
     let fc1_weight_count = L3_BIG * FC1_INPUTS_PADDED;
-    let mut fc1_weights = vec![0i8; fc1_weight_count].into_boxed_slice();
-    read_i8_slice(data, pos, &mut fc1_weights)?;
+    let mut fc1_weights_raw = vec![0i8; fc1_weight_count];
+    read_i8_slice(data, pos, &mut fc1_weights_raw)?;
+    let fc1_weights = transpose_weights(&fc1_weights_raw, L3_BIG, FC1_INPUTS_PADDED);
 
     // fc_2: biases[1] as i32, weights[1*32] as i8
     let mut fc2_biases = Box::new([0i32; 1]);
