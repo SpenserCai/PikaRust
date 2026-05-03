@@ -1,7 +1,9 @@
 use std::fmt;
 
 use crate::bitboard::Bitboard;
-use crate::types::{Color, Move, Piece, PieceType, Square};
+use crate::types::{Color, Move, Piece, PieceType, Square, make_key};
+
+use crate::nnue::features::half_ka_v2_hm::MID_MIRROR_ENCODING;
 
 use super::state::{BloomFilter, StateInfo};
 
@@ -142,7 +144,22 @@ impl Position {
 
     #[inline]
     pub const fn key(&self) -> u64 {
-        self.state.key
+        self.adjust_key60(self.state.key)
+    }
+
+    #[inline]
+    const fn adjust_key60(&self, k: u64) -> u64 {
+        let rule60_part = if self.state.rule60 < 14 {
+            k
+        } else {
+            k ^ make_key(((self.state.rule60 - 14) / 8) as u64)
+        };
+        let bloom_part = if self.bloom_filter.count(self.state.key) > 0 {
+            make_key(14)
+        } else {
+            0
+        };
+        rule60_part ^ bloom_part
     }
 
     #[inline]
@@ -197,7 +214,8 @@ impl Position {
         self.by_type_bb[pc.piece_type().index()] |= sq_bb;
         self.by_color_bb[pc.color()] |= sq_bb;
         self.piece_count[pc] += 1;
-        self.piece_count[Piece::make(pc.color(), PieceType::Rook).index()] += 0;
+        self.mid_encoding_val[pc.color().index()] = self.mid_encoding_val[pc.color().index()]
+            .wrapping_add(MID_MIRROR_ENCODING[pc.index()][sq.index()]);
     }
 
     pub fn remove_piece(&mut self, sq: Square) {
@@ -208,6 +226,8 @@ impl Position {
         self.by_color_bb[pc.color()] ^= sq_bb;
         self.board[sq] = Piece::NONE;
         self.piece_count[pc] -= 1;
+        self.mid_encoding_val[pc.color().index()] = self.mid_encoding_val[pc.color().index()]
+            .wrapping_sub(MID_MIRROR_ENCODING[pc.index()][sq.index()]);
     }
 
     pub fn move_piece(&mut self, from: Square, to: Square) {
@@ -218,6 +238,10 @@ impl Position {
         self.by_color_bb[pc.color()] ^= from_to;
         self.board[from] = Piece::NONE;
         self.board[to] = pc;
+        let c = pc.color().index();
+        self.mid_encoding_val[c] = self.mid_encoding_val[c]
+            .wrapping_sub(MID_MIRROR_ENCODING[pc.index()][from.index()])
+            .wrapping_add(MID_MIRROR_ENCODING[pc.index()][to.index()]);
     }
 
     pub fn debug_check_consistency(&self, context: &str) {

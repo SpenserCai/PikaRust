@@ -2,6 +2,8 @@ use thiserror::Error;
 
 use crate::types::{Color, File, Piece, PieceType, Rank, Square};
 
+use crate::nnue::features::half_ka_v2_hm::BALANCE_ENCODING;
+
 use super::position::Position;
 use super::zobrist::zobrist;
 
@@ -41,6 +43,7 @@ impl Position {
     #[allow(clippy::too_many_lines)]
     pub fn from_fen(fen: &str) -> Result<Self, FenError> {
         let mut pos = Self::new();
+        pos.mid_encoding_val = [BALANCE_ENCODING; Color::NUM];
         let mut chars = fen.bytes().peekable();
 
         let mut file = 0u8;

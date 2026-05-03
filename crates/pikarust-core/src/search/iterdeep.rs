@@ -847,6 +847,7 @@ impl Worker {
                 && !is_decisive(tt_data.value)
                 && (tt_data.bound as u8 & Bound::Lower as u8) != 0
                 && tt_data.depth >= depth - 3
+                && !self.is_shuffling(m, ss, ply)
             {
                 let sb = tt_data.value - (44 + 72 * i32::from(tt_pv && !pv_node)) * depth / 69;
                 let sd = new_depth / 2;
@@ -1233,6 +1234,23 @@ impl Worker {
         }
 
         best_value
+    }
+
+    /// Detect shuffling: both sides repeatedly move the same piece back and forth.
+    /// Aligns with Pikafish `is_shuffling` (search.cpp:134-142).
+    #[inline]
+    fn is_shuffling(&self, m: Move, ss: usize, ply: i32) -> bool {
+        if self.root_pos.is_capture(m) || self.root_pos.rule60_count() < 11 {
+            return false;
+        }
+        if self.root_pos.state().plies_from_null <= 6 || ply < 19 {
+            return false;
+        }
+        ss >= 4
+            && self.ss_current_moves[ss - 2].is_ok()
+            && self.ss_current_moves[ss - 4].is_ok()
+            && m.from_sq() == self.ss_current_moves[ss - 2].to_sq()
+            && self.ss_current_moves[ss - 2].from_sq() == self.ss_current_moves[ss - 4].to_sq()
     }
 }
 
