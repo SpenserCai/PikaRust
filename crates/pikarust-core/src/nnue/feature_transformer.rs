@@ -144,7 +144,7 @@ pub fn refresh_threat_accumulator(model: &NnueModel, pos: &Position, acc: &mut A
         full_threats::append_active_indices(pos, perspective, &mut active);
 
         let c = perspective as usize;
-        acc.accumulation[c] = *model.ft.biases;
+        acc.accumulation[c] = [0i16; TRANSFORMED_DIMS];
         acc.psqt_accumulation[c] = [0i32; PSQT_BUCKETS];
 
         for &idx in active.as_slice() {
