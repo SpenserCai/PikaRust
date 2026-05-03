@@ -548,7 +548,6 @@ impl Worker {
                 self.ss_current_moves[ss] = Move::NULL;
                 self.set_cont_hist_index_sentinel(ply);
                 self.root_pos.do_null_move();
-                self.inc_nodes();
                 let null_value =
                     -self.ab_search::<false>(ply + 1, -beta, -beta + 1, depth - r, false);
                 self.root_pos.undo_null_move();
