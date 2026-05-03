@@ -37,15 +37,15 @@ pub use tables::{
 use crate::types::Square;
 
 pub fn between_bb(s1: Square, s2: Square) -> Bitboard {
-    let pseudo_rook_s1 = sliding_attack_rook(s1, Bitboard::EMPTY);
+    let pseudo_rook_s1 = attacks_bb_rook(s1, Bitboard::EMPTY);
 
     let mut result = if (pseudo_rook_s1 & s2).is_not_empty() {
-        sliding_attack_rook(s1, Bitboard::from(s2)) & sliding_attack_rook(s2, Bitboard::from(s1))
+        attacks_bb_rook(s1, Bitboard::from(s2)) & attacks_bb_rook(s2, Bitboard::from(s1))
     } else {
         Bitboard::EMPTY
     };
 
-    let pseudo_knight_s1 = lame_leaper_attack_knight(s1, Bitboard::EMPTY);
+    let pseudo_knight_s1 = attacks_bb_knight(s1, Bitboard::EMPTY);
     if (pseudo_knight_s1 & s2).is_not_empty() {
         let d_raw = i16::from(s2.raw()) - i16::from(s1.raw());
         result |= lame_leaper_path_dir_knight_to(crate::types::Direction(d_raw as i8), s1);
@@ -55,8 +55,8 @@ pub fn between_bb(s1: Square, s2: Square) -> Bitboard {
 }
 
 pub fn line_bb(s1: Square, s2: Square) -> Bitboard {
-    let pseudo_rook_s1 = sliding_attack_rook(s1, Bitboard::EMPTY);
-    let pseudo_rook_s2 = sliding_attack_rook(s2, Bitboard::EMPTY);
+    let pseudo_rook_s1 = attacks_bb_rook(s1, Bitboard::EMPTY);
+    let pseudo_rook_s2 = attacks_bb_rook(s2, Bitboard::EMPTY);
 
     if (pseudo_rook_s1 & s2).is_not_empty() {
         (pseudo_rook_s1 & pseudo_rook_s2) | s1 | s2
@@ -66,9 +66,9 @@ pub fn line_bb(s1: Square, s2: Square) -> Bitboard {
 }
 
 pub fn ray_pass_bb(s1: Square, s2: Square) -> Bitboard {
-    let pseudo_rook_s1 = sliding_attack_rook(s1, Bitboard::EMPTY);
+    let pseudo_rook_s1 = attacks_bb_rook(s1, Bitboard::EMPTY);
     if (pseudo_rook_s1 & s2).is_not_empty() {
-        sliding_attack_cannon(s1, Bitboard::from(s2))
+        attacks_bb_cannon(s1, Bitboard::from(s2))
     } else {
         Bitboard::EMPTY
     }

@@ -279,33 +279,29 @@ impl Worker {
             && self.acc_stack.current_psq().acc.computed[1];
 
         if !psq_computed {
-            if let Some(prev) = self.acc_stack.prev_psq() {
+            if let Some((prev, current)) = self.acc_stack.prev_and_current_psq_mut() {
                 if prev.acc.computed[0] && prev.acc.computed[1] {
-                    if let DiffType::DirtyPiece(ref dirty) = self.acc_stack.current_psq().diff {
-                        let dirty_clone = dirty.clone();
-                        let prev_acc = prev.acc.clone();
-                        let acc = &mut self.acc_stack.current_psq_mut().acc;
+                    if let DiffType::DirtyPiece(ref dirty) = current.diff {
+                        let dirty_copy = dirty.clone(); // 24 bytes, not 4.2KB
                         crate::nnue::feature_transformer::update_psq_accumulator_incremental(
                             net.model(),
                             &self.root_pos,
-                            &prev_acc,
-                            acc,
-                            &dirty_clone,
+                            &prev.acc,
+                            &mut current.acc,
+                            &dirty_copy,
                         );
                     } else {
-                        let acc = &mut self.acc_stack.current_psq_mut().acc;
                         crate::nnue::feature_transformer::refresh_psq_accumulator(
                             net.model(),
                             &self.root_pos,
-                            acc,
+                            &mut current.acc,
                         );
                     }
                 } else {
-                    let acc = &mut self.acc_stack.current_psq_mut().acc;
                     crate::nnue::feature_transformer::refresh_psq_accumulator(
                         net.model(),
                         &self.root_pos,
-                        acc,
+                        &mut current.acc,
                     );
                 }
             } else {

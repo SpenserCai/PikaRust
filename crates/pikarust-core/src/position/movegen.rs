@@ -1,6 +1,6 @@
 use crate::bitboard::{
-    Bitboard, HALF_BB, between_bb, lame_leaper_attack_bishop, lame_leaper_attack_knight, line_bb,
-    pawn_attacks_bb, sliding_attack_cannon, sliding_attack_rook,
+    Bitboard, HALF_BB, attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight, attacks_bb_rook,
+    between_bb, line_bb, pawn_attacks_bb,
 };
 use crate::types::{Color, MAX_MOVES, Move, PieceType};
 
@@ -89,10 +89,10 @@ fn generate_piece_moves(
             PieceType::Cannon => {
                 attacks = Bitboard::EMPTY;
                 if gen_type != GenType::Quiets {
-                    attacks |= sliding_attack_cannon(from, occupied) & pos.pieces_by_color(!us);
+                    attacks |= attacks_bb_cannon(from, occupied) & pos.pieces_by_color(!us);
                 }
                 if gen_type != GenType::Captures {
-                    attacks |= sliding_attack_rook(from, occupied) & !occupied;
+                    attacks |= attacks_bb_rook(from, occupied) & !occupied;
                 }
                 if gen_type == GenType::Evasions {
                     attacks &= target;
@@ -102,13 +102,13 @@ fn generate_piece_moves(
                 attacks = pawn_attacks_bb(us, from) & target;
             }
             PieceType::Rook => {
-                attacks = sliding_attack_rook(from, occupied) & target;
+                attacks = attacks_bb_rook(from, occupied) & target;
             }
             PieceType::Knight => {
-                attacks = lame_leaper_attack_knight(from, occupied) & target;
+                attacks = attacks_bb_knight(from, occupied) & target;
             }
             PieceType::Bishop => {
-                attacks = lame_leaper_attack_bishop(from, occupied) & HALF_BB[us] & target;
+                attacks = attacks_bb_bishop(from, occupied) & HALF_BB[us] & target;
             }
             PieceType::Advisor => {
                 attacks = pos.pseudo_attacks_advisor(from) & target;
@@ -201,15 +201,15 @@ fn generate_evasions(pos: &Position, moves: &mut MoveList) {
                     pawn_attacks_bb(us, hurdle_sq) & not_line & !pos.pieces_by_color(us)
                 }
                 PieceType::Cannon => {
-                    (sliding_attack_rook(hurdle_sq, occupied) & not_line & !occupied)
-                        | (sliding_attack_cannon(hurdle_sq, occupied) & pos.pieces_by_color(!us))
+                    (attacks_bb_rook(hurdle_sq, occupied) & not_line & !occupied)
+                        | (attacks_bb_cannon(hurdle_sq, occupied) & pos.pieces_by_color(!us))
                 }
                 _ => {
                     let att = match hurdle_pt {
-                        PieceType::Rook => sliding_attack_rook(hurdle_sq, occupied),
-                        PieceType::Knight => lame_leaper_attack_knight(hurdle_sq, occupied),
+                        PieceType::Rook => attacks_bb_rook(hurdle_sq, occupied),
+                        PieceType::Knight => attacks_bb_knight(hurdle_sq, occupied),
                         PieceType::Bishop => {
-                            lame_leaper_attack_bishop(hurdle_sq, occupied) & HALF_BB[us]
+                            attacks_bb_bishop(hurdle_sq, occupied) & HALF_BB[us]
                         }
                         PieceType::Advisor => pos.pseudo_attacks_advisor(hurdle_sq),
                         _ => Bitboard::EMPTY,

@@ -239,6 +239,17 @@ impl AccumulatorStack {
         self.psq[self.size].diff = DiffType::DirtyPiece(dirty);
     }
 
+    /// Borrow prev and current PSQ accumulators simultaneously (split borrow).
+    pub fn prev_and_current_psq_mut(
+        &mut self,
+    ) -> Option<(&AccumulatorState, &mut AccumulatorState)> {
+        if self.size == 0 {
+            return None;
+        }
+        let (head, tail) = self.psq.split_at_mut(self.size);
+        Some((&head[self.size - 1], &mut tail[0]))
+    }
+
     pub fn set_threat_diff(&mut self, dirty: DirtyThreats) {
         self.threat[self.size].diff = DiffType::DirtyThreats(dirty);
     }

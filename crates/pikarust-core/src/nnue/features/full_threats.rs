@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use crate::bitboard::{Bitboard, PseudoAttacksTable, pawn_attacks_bb, sliding_attack_cannon};
+use crate::bitboard::{Bitboard, PseudoAttacksTable, attacks_bb_cannon, pawn_attacks_bb};
 use crate::position::Position;
 use crate::types::{Color, Piece, PieceType, Square};
 
@@ -78,7 +78,7 @@ impl ThreatOffsetTable {
                     pawn_attacks_bb(attacker_color, from)
                 } else if pt == PieceType::Cannon {
                     let king_attacks = pseudo_attacks.unconstrained_king(from);
-                    sliding_attack_cannon(from, king_attacks)
+                    attacks_bb_cannon(from, king_attacks)
                 } else {
                     pseudo_attacks.get(pt, from)
                 };
@@ -211,13 +211,13 @@ fn attacks_bb_with_occ(
     occupied: Bitboard,
 ) -> Bitboard {
     use crate::bitboard::{
-        lame_leaper_attack_bishop, lame_leaper_attack_knight, sliding_attack_rook,
+        attacks_bb_bishop, attacks_bb_knight, attacks_bb_rook,
     };
     match pt {
-        PieceType::Rook => sliding_attack_rook(sq, occupied),
-        PieceType::Cannon => sliding_attack_cannon(sq, occupied),
-        PieceType::Knight => lame_leaper_attack_knight(sq, occupied),
-        PieceType::Bishop => lame_leaper_attack_bishop(sq, occupied),
+        PieceType::Rook => attacks_bb_rook(sq, occupied),
+        PieceType::Cannon => attacks_bb_cannon(sq, occupied),
+        PieceType::Knight => attacks_bb_knight(sq, occupied),
+        PieceType::Bishop => attacks_bb_bishop(sq, occupied),
         PieceType::King => pseudo.get(PieceType::King, sq),
         PieceType::Advisor => pseudo.get(PieceType::Advisor, sq),
         PieceType::Pawn => unreachable!(),

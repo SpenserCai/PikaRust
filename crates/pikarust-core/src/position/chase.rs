@@ -1,6 +1,6 @@
 use crate::bitboard::{
-    Bitboard, HALF_BB, between_bb, lame_leaper_attack_bishop, lame_leaper_attack_knight,
-    pawn_attacks_bb, sliding_attack_cannon, sliding_attack_rook, square_bb,
+    Bitboard, HALF_BB, attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight, attacks_bb_rook,
+    between_bb, pawn_attacks_bb, square_bb,
 };
 use crate::types::{Color, Move, Piece, PieceType, Square, VALUE_DRAW, Value, mate_in, mated_in};
 
@@ -44,10 +44,10 @@ impl Position {
     fn attacks_bb_by_type(&self, pt: PieceType, sq: Square) -> Bitboard {
         let occupied = self.all_pieces();
         match pt {
-            PieceType::Rook => sliding_attack_rook(sq, occupied),
-            PieceType::Cannon => sliding_attack_cannon(sq, occupied),
-            PieceType::Knight => lame_leaper_attack_knight(sq, occupied),
-            PieceType::Bishop => lame_leaper_attack_bishop(sq, occupied),
+            PieceType::Rook => attacks_bb_rook(sq, occupied),
+            PieceType::Cannon => attacks_bb_cannon(sq, occupied),
+            PieceType::Knight => attacks_bb_knight(sq, occupied),
+            PieceType::Bishop => attacks_bb_bishop(sq, occupied),
             PieceType::Advisor => self.pseudo_attacks_advisor(sq),
             PieceType::King => self.pseudo_attacks_king(sq),
             PieceType::Pawn => pawn_attacks_bb(self.side_to_move, sq),
