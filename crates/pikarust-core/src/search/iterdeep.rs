@@ -557,7 +557,7 @@ impl Worker {
 
             // Null move search
             if cut_node
-                && eval >= beta - 8 * depth - 50 * i32::from(improving) + 187
+                && self.ss_static_evals[ss] >= beta - 8 * depth - 50 * i32::from(improving) + 187
                 && !excluded_move.is_ok()
                 && self.root_pos.major_material(us) > 0
                 && ply >= self.nmp_min_ply
@@ -586,8 +586,8 @@ impl Worker {
                 }
             }
 
-            // Phase B: improving |= eval >= beta (after null move)
-            improving |= eval >= beta;
+            // Phase B: improving |= ss->staticEval >= beta (after null move)
+            improving |= self.ss_static_evals[ss] >= beta;
 
             // IIR (Phase B: add followPV and priorReduction conditions)
             if !self.ss_follow_pvs[ss]
@@ -613,7 +613,7 @@ impl Worker {
                 let mut pc_mp = MovePicker::new_probcut(
                     &self.root_pos,
                     tt_data.tt_move,
-                    prob_cut_beta - eval,
+                    prob_cut_beta - self.ss_static_evals[ss],
                     &self.capture_history,
                 );
 

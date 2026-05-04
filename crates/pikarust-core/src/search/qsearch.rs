@@ -177,7 +177,7 @@ impl Worker {
             // Pruning
             if !is_loss(best_value) {
                 if !gives_check
-                    && prev_sq.is_some_and(|psq| m.to_sq() != psq)
+                    && prev_sq.is_none_or(|psq| m.to_sq() != psq)
                     && !is_loss(futility_base)
                 {
                     if move_count > 2 {
