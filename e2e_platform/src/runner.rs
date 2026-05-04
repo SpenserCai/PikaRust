@@ -31,7 +31,15 @@ pub fn run_all(config: &E2eConfig, filter: Option<&str>) -> RunReport {
 
     for case in &cases {
         if let Some(f) = filter {
-            if !case.name().contains(f) {
+            // Exact match takes priority; fall back to substring match only
+            // when no case matches exactly.  This prevents "strength_gauntlet"
+            // from also matching "strength_gauntlet_self" / "_ref".
+            let has_exact = cases.iter().any(|c| c.name() == f);
+            if has_exact {
+                if case.name() != f {
+                    continue;
+                }
+            } else if !case.name().contains(f) {
                 continue;
             }
         }
