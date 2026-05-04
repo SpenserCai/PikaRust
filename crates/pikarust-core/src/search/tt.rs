@@ -173,7 +173,7 @@ impl TTEntry {
 
         if b == Bound::Exact
             || new_key16 != old_key16
-            || new_depth8.wrapping_add(2 * pv_u8) > old_depth8.wrapping_sub(4)
+            || i32::from(new_depth8) + 2 * i32::from(pv_u8) > i32::from(old_depth8) - 4
             || self.relative_age(curr_generation) != 0
         {
             let gen_bound8 = curr_generation | ((b as u8) << BOUND_SHIFT) | (pv_u8 << PV_SHIFT);
