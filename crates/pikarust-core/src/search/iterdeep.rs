@@ -411,35 +411,7 @@ impl Worker {
             0
         };
 
-        // evalDiff history update (C++ skips this when in_check via goto moves_loop)
-        if !in_check
-            && ss >= 1
-            && self.ss_current_moves[ss - 1].is_ok()
-            && !self.ss_in_check[ss - 1]
-            && !prior_capture
-            && is_valid(self.ss_static_evals[ss])
-            && is_valid(self.ss_static_evals[ss - 1])
-        {
-            let eval_diff =
-                (-(self.ss_static_evals[ss - 1] + self.ss_static_evals[ss])).clamp(-110, 187) + 34;
-            let not_us = !self.root_pos.side_to_move();
-            let prev_move = self.ss_current_moves[ss - 1];
-            self.main_history.update(not_us, prev_move, eval_diff * 13);
-
-            if !tt_hit {
-                if let Some(psq) = prev_sq {
-                    let pc_on_prev = self.root_pos.piece_on(psq);
-                    if pc_on_prev.piece_type() != PieceType::Pawn {
-                        let pawn_key = self.root_pos.pawn_key();
-                        self.pawn_history.entry_mut(pawn_key).update(
-                            pc_on_prev,
-                            psq,
-                            eval_diff * 12,
-                        );
-                    }
-                }
-            }
-        }
+        // evalDiff history update is done after TT cutoff (see below in !in_check block)
         let opponent_worsening = ss >= 1
             && is_valid(self.ss_static_evals[ss])
             && is_valid(self.ss_static_evals[ss - 1])
@@ -462,11 +434,8 @@ impl Worker {
 
         let mut improving = ss >= 2 && eval > self.ss_static_evals[ss - 2];
 
-        // TT value as better eval
-        if !in_check
-            && !excluded_move.is_ok()
-            && is_valid(tt_data.value)
-        {
+        // TT value as better eval (C++: no excludedMove guard here)
+        if !in_check && is_valid(tt_data.value) {
             let bound_ok = if tt_data.value > eval {
                 tt_data.bound as u8 & Bound::Lower as u8 != 0
             } else {
@@ -531,6 +500,36 @@ impl Worker {
         }
 
         if !in_check {
+            // evalDiff history update (C++: search.cpp:808-813, after TT cutoff and goto moves_loop)
+            if ss >= 1
+                && self.ss_current_moves[ss - 1].is_ok()
+                && !self.ss_in_check[ss - 1]
+                && !prior_capture
+                && is_valid(self.ss_static_evals[ss])
+                && is_valid(self.ss_static_evals[ss - 1])
+            {
+                let eval_diff = (-(self.ss_static_evals[ss - 1] + self.ss_static_evals[ss]))
+                    .clamp(-110, 187)
+                    + 34;
+                let not_us = !self.root_pos.side_to_move();
+                let prev_move = self.ss_current_moves[ss - 1];
+                self.main_history.update(not_us, prev_move, eval_diff * 13);
+
+                if !tt_hit {
+                    if let Some(psq) = prev_sq {
+                        let pc_on_prev = self.root_pos.piece_on(psq);
+                        if pc_on_prev.piece_type() != PieceType::Pawn {
+                            let pawn_key = self.root_pos.pawn_key();
+                            self.pawn_history.entry_mut(pawn_key).update(
+                                pc_on_prev,
+                                psq,
+                                eval_diff * 12,
+                            );
+                        }
+                    }
+                }
+            }
+
             // Razoring
             if !pv_node && eval < alpha - 1370 - 244 * depth * depth {
                 return self.qsearch(ply, alpha, beta, false);
