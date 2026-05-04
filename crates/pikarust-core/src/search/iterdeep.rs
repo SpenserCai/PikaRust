@@ -15,6 +15,7 @@ use super::search::{
 
 impl Worker {
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::cognitive_complexity)]
     pub fn iterative_deepening(&mut self) -> Option<Move> {
         let is_main = self.is_main_thread();
         let us = self.root_pos.side_to_move();
@@ -26,6 +27,7 @@ impl Worker {
 
         self.reset_ss();
         self.reset_acc();
+        self.last_iteration_pv.clear();
 
         if is_main {
             if self.best_previous_score == VALUE_INFINITE {
@@ -124,6 +126,25 @@ impl Worker {
                 }
 
                 self.last_iteration_pv = self.root_moves[0].pv.clone();
+            } else if self.pv_idx == 0
+                && self.root_moves[0].score != -VALUE_INFINITE
+                && is_loss(self.root_moves[0].score)
+            {
+                if !self.last_iteration_pv.is_empty() {
+                    let last_pv_move = self.last_iteration_pv[0];
+                    if let Some(idx) = self
+                        .root_moves
+                        .iter()
+                        .position(|rm| rm.pv[0] == last_pv_move)
+                    {
+                        self.root_moves[..=idx].rotate_right(1);
+                    }
+                    self.root_moves[0].pv.clone_from(&self.last_iteration_pv);
+                    self.root_moves[0].score = self.root_moves[0].previous_score;
+                    self.root_moves[0].uci_score = self.root_moves[0].previous_score;
+                } else if !self.root_moves[0].score_lowerbound {
+                    self.root_moves[0].score_upperbound = true;
+                }
             }
 
             if self.limits.mate > 0
@@ -424,29 +445,27 @@ impl Worker {
             && is_valid(self.ss_static_evals[ss - 1])
             && self.ss_static_evals[ss] > -self.ss_static_evals[ss - 1];
 
-        // Phase B: Depth adjustments based on priorReduction/opponentWorsening
-        if !in_check {
-            if prior_reduction >= 3 && !opponent_worsening {
-                depth += 1;
-            }
-            if prior_reduction >= 2
-                && depth >= 2
-                && is_valid(self.ss_static_evals[ss])
-                && ss >= 1
-                && is_valid(self.ss_static_evals[ss - 1])
-                && self.ss_static_evals[ss] + self.ss_static_evals[ss - 1] > 193
-            {
-                depth -= 1;
-            }
+        // Depth adjustments based on priorReduction/opponentWorsening
+        // These apply regardless of in_check (before C++ goto moves_loop)
+        if prior_reduction >= 3 && !opponent_worsening {
+            depth += 1;
+        }
+        if prior_reduction >= 2
+            && depth >= 2
+            && is_valid(self.ss_static_evals[ss])
+            && ss >= 1
+            && is_valid(self.ss_static_evals[ss - 1])
+            && self.ss_static_evals[ss] + self.ss_static_evals[ss - 1] > 193
+        {
+            depth -= 1;
         }
 
         let mut improving = ss >= 2 && eval > self.ss_static_evals[ss - 2];
 
-        // Phase B: TT value as better eval
+        // TT value as better eval
         if !in_check
             && !excluded_move.is_ok()
             && is_valid(tt_data.value)
-            && !is_decisive(tt_data.value)
         {
             let bound_ok = if tt_data.value > eval {
                 tt_data.bound as u8 & Bound::Lower as u8 != 0
