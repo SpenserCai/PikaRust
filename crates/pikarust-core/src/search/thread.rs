@@ -243,7 +243,10 @@ pub struct SearchResult {
     pub ponder_move: Option<Move>,
     pub score: Value,
     pub depth: i32,
+    pub seldepth: i32,
     pub nodes: u64,
+    pub hashfull: i32,
+    pub pv: Vec<Move>,
 }
 
 impl Default for SearchResult {
@@ -253,7 +256,10 @@ impl Default for SearchResult {
             ponder_move: None,
             score: -VALUE_INFINITE,
             depth: 0,
+            seldepth: 0,
             nodes: 0,
+            hashfull: 0,
+            pv: Vec::new(),
         }
     }
 }
@@ -290,7 +296,14 @@ fn extract_search_result(workers: &[Worker]) -> SearchResult {
         ponder_move,
         score,
         depth,
+        seldepth: workers[best_idx].sel_depth,
         nodes,
+        hashfull: workers[best_idx].tt.hashfull(workers[best_idx].tt.generation()),
+        pv: if workers[best_idx].root_moves.is_empty() {
+            Vec::new()
+        } else {
+            workers[best_idx].root_moves[0].pv.clone()
+        },
     }
 }
 

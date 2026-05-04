@@ -48,7 +48,10 @@ pub struct SearchResult {
     pub score_cp: i32,
     pub wdl: Option<(i32, i32, i32)>,
     pub depth: Depth,
+    pub seldepth: i32,
     pub nodes: u64,
+    pub hashfull: i32,
+    pub pv: Vec<Move>,
 }
 
 impl Default for SearchResult {
@@ -60,7 +63,10 @@ impl Default for SearchResult {
             score_cp: 0,
             wdl: None,
             depth: 0,
+            seldepth: 0,
             nodes: 0,
+            hashfull: 0,
+            pv: Vec::new(),
         }
     }
 }
@@ -262,7 +268,10 @@ impl SearchHandle {
             score_cp,
             wdl,
             depth: raw.depth,
+            seldepth: raw.seldepth,
             nodes: raw.nodes,
+            hashfull: raw.hashfull,
+            pv: raw.pv.clone(),
         }
     }
 }

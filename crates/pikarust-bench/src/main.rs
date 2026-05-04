@@ -162,10 +162,15 @@ fn bench() {
             BENCH_FENS.len(),
         );
         eprintln!(
-            "info depth {} score cp {} nodes {} nps {} time {}",
-            result.depth, result.score_cp, result.nodes, pos_nps, pos_ms,
+            "info depth {} seldepth {} multipv 1 score cp {} nodes {} nps {} hashfull {} tbhits 0 time {} pv{}",
+            result.depth, result.seldepth, result.score_cp, result.nodes, pos_nps,
+            result.hashfull, pos_ms,
+            result.pv.iter().fold(String::new(), |s, m| format!("{s} {m}")),
         );
-        eprintln!("bestmove {}", result.best_move);
+        let ponder_str = result
+            .ponder_move
+            .map_or(String::new(), |p| format!(" ponder {p}"));
+        eprintln!("bestmove {}{ponder_str}", result.best_move);
     }
 
     let elapsed_ms = elapsed.elapsed().as_millis().max(1) as u64;
