@@ -434,8 +434,8 @@ impl Worker {
 
         let mut improving = ss >= 2 && eval > self.ss_static_evals[ss - 2];
 
-        // TT value as better eval (C++: no excludedMove guard here)
-        if !in_check && is_valid(tt_data.value) {
+        // TT value as better eval (C++: inside `else if (ttHit)` branch, excludedMove implicitly excluded)
+        if !in_check && !excluded_move.is_ok() && is_valid(tt_data.value) {
             let bound_ok = if tt_data.value > eval {
                 tt_data.bound as u8 & Bound::Lower as u8 != 0
             } else {
