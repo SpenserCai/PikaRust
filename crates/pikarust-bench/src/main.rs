@@ -151,15 +151,21 @@ fn bench() {
 
     for (i, fen) in BENCH_FENS.iter().enumerate() {
         engine.set_position(fen, &[]).expect("valid fen");
+        let pos_start = Instant::now();
         let result = engine.go(&limits).wait();
+        let pos_ms = pos_start.elapsed().as_millis().max(1) as u64;
+        let pos_nps = 1000 * result.nodes / pos_ms;
         total_nodes += result.nodes;
         eprintln!(
-            "Position {}/{}: {} nodes  bestmove {}",
+            "\nPosition: {}/{} ({fen})",
             i + 1,
             BENCH_FENS.len(),
-            result.nodes,
-            result.best_move
         );
+        eprintln!(
+            "info depth {} score cp {} nodes {} nps {} time {}",
+            result.depth, result.score_cp, result.nodes, pos_nps, pos_ms,
+        );
+        eprintln!("bestmove {}", result.best_move);
     }
 
     let elapsed_ms = elapsed.elapsed().as_millis().max(1) as u64;
