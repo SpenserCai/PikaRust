@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::types::{Bound, DEPTH_NONE, Depth, Key, Move, VALUE_NONE, Value};
 
@@ -29,35 +30,78 @@ impl TTData {
     };
 }
 
-// TTEntry is stored as two AtomicU64 for lock-free concurrent access.
-// Layout of data64 (first u64):
+// TTEntry: exactly 10 bytes, matching Pikafish layout.
+//
+// Pikafish stores this as a plain packed struct with racy reads/writes.
+// We mirror this exactly: raw byte storage with unaligned access.
+//
+// Layout (10 bytes):
+//   offset 0: key16     (u16)
+//   offset 2: depth8    (u8)
+//   offset 3: genBound8 (u8)  — [pv:1][bound:2][gen:5]
+//   offset 4: move16    (u16)
+//   offset 6: value16   (i16)
+//   offset 8: eval16    (i16)
+//
+// For efficiency we pack the first 8 bytes into a u64:
 //   bits  0..15: key16
 //   bits 16..23: depth8
 //   bits 24..31: genBound8
 //   bits 32..47: move16
 //   bits 48..63: value16
-// Layout of eval64 (second u64):
-//   bits  0..15: eval16
-//   bits 16..63: unused
 #[repr(C)]
 struct TTEntry {
-    data64: AtomicU64,
-    eval64: AtomicU64,
+    data: UnsafeCell<[u8; 8]>,
+    eval: UnsafeCell<[u8; 2]>,
 }
 
+// SAFETY: TTEntry uses racy reads/writes (same concurrency model as Pikafish).
+// Data races on individual entries are benign — a torn read just produces
+// garbage that fails the key16 check and gets discarded.
+#[allow(unsafe_code)]
+unsafe impl Sync for TTEntry {}
+
 impl TTEntry {
+    const ZERO: Self = Self {
+        data: UnsafeCell::new([0; 8]),
+        eval: UnsafeCell::new([0; 2]),
+    };
+
+    #[allow(unsafe_code)]
+    #[inline]
+    fn load_data(&self) -> u64 {
+        unsafe { std::ptr::read_unaligned(self.data.get().cast::<u64>()) }
+    }
+
+    #[allow(unsafe_code)]
+    #[inline]
+    fn store_data(&self, val: u64) {
+        unsafe { std::ptr::write_unaligned(self.data.get().cast::<u64>(), val) }
+    }
+
+    #[allow(unsafe_code)]
+    #[inline]
+    fn load_eval(&self) -> i16 {
+        unsafe { std::ptr::read_unaligned(self.eval.get().cast::<i16>()) }
+    }
+
+    #[allow(unsafe_code)]
+    #[inline]
+    fn store_eval(&self, val: i16) {
+        unsafe { std::ptr::write_unaligned(self.eval.get().cast::<i16>(), val) }
+    }
+
     fn read(&self) -> (u16, u8, u8, u16, i16, i16) {
-        let d = self.data64.load(Ordering::Relaxed);
-        let e = self.eval64.load(Ordering::Relaxed);
+        let d = self.load_data();
+        let e = self.load_eval();
 
         let key16 = d as u16;
         let depth8 = (d >> 16) as u8;
         let gen_bound8 = (d >> 24) as u8;
         let move16 = (d >> 32) as u16;
         let value16 = (d >> 48) as i16;
-        let eval16 = e as i16;
 
-        (key16, depth8, gen_bound8, move16, value16, eval16)
+        (key16, depth8, gen_bound8, move16, value16, e)
     }
 
     fn to_tt_data(&self) -> TTData {
@@ -82,20 +126,19 @@ impl TTEntry {
     }
 
     fn is_occupied(&self) -> bool {
-        let d = self.data64.load(Ordering::Relaxed);
-        (d >> 16) as u8 != 0
+        (self.load_data() >> 16) as u8 != 0
     }
 
     fn key16(&self) -> u16 {
-        self.data64.load(Ordering::Relaxed) as u16
+        self.load_data() as u16
     }
 
     fn depth8(&self) -> u8 {
-        (self.data64.load(Ordering::Relaxed) >> 16) as u8
+        (self.load_data() >> 16) as u8
     }
 
     fn gen_bound8(&self) -> u8 {
-        (self.data64.load(Ordering::Relaxed) >> 24) as u8
+        (self.load_data() >> 24) as u8
     }
 
     fn relative_age(&self, curr_generation: u8) -> u8 {
@@ -121,8 +164,7 @@ impl TTEntry {
         let move16 = if m.raw() != 0 || new_key16 != old_key16 {
             m.raw()
         } else {
-            let old_d = self.data64.load(Ordering::Relaxed);
-            (old_d >> 32) as u16
+            (self.load_data() >> 32) as u16
         };
 
         let old_depth8 = self.depth8();
@@ -142,21 +184,21 @@ impl TTEntry {
                 | (u64::from(move16) << 32)
                 | (u64::from(v as u16) << 48);
 
-            let eval = u64::from(ev as i16 as u16);
-
-            self.data64.store(data, Ordering::Relaxed);
-            self.eval64.store(eval, Ordering::Relaxed);
+            self.store_data(data);
+            self.store_eval(ev as i16);
         }
     }
 }
 
+// 3 entries × 10 bytes = 30 bytes + 2 padding = 32 bytes, aligned to 32.
 #[repr(C, align(32))]
 struct Cluster {
     entries: [TTEntry; CLUSTER_SIZE],
     _padding: [u8; 2],
 }
 
-const _: () = assert!(size_of::<Cluster>() == 64);
+const _: () = assert!(size_of::<Cluster>() == 32);
+const _: () = assert!(size_of::<TTEntry>() == 10);
 
 pub struct ProbeResult {
     pub found: bool,
@@ -168,7 +210,7 @@ pub struct TTWriter {
     entry_ptr: *const TTEntry,
 }
 
-// SAFETY: TTEntry uses AtomicU64 internally, so concurrent access is safe.
+// SAFETY: TTEntry access is racy but safe (same model as Pikafish).
 #[allow(unsafe_code)]
 unsafe impl Send for TTWriter {}
 #[allow(unsafe_code)]
@@ -201,7 +243,7 @@ pub struct TranspositionTable {
     generation8: AtomicU8,
 }
 
-// SAFETY: All access to entries is through AtomicU64 with Relaxed ordering.
+// SAFETY: TTEntry uses UnsafeCell with racy access (same as Pikafish).
 #[allow(unsafe_code)]
 unsafe impl Send for TranspositionTable {}
 #[allow(unsafe_code)]
@@ -215,20 +257,7 @@ impl TranspositionTable {
         let mut clusters = Vec::with_capacity(cluster_count);
         for _ in 0..cluster_count {
             clusters.push(Cluster {
-                entries: [
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                ],
+                entries: [TTEntry::ZERO, TTEntry::ZERO, TTEntry::ZERO],
                 _padding: [0; 2],
             });
         }
@@ -248,20 +277,7 @@ impl TranspositionTable {
         self.clusters.reserve(cluster_count);
         for _ in 0..cluster_count {
             self.clusters.push(Cluster {
-                entries: [
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                    TTEntry {
-                        data64: AtomicU64::new(0),
-                        eval64: AtomicU64::new(0),
-                    },
-                ],
+                entries: [TTEntry::ZERO, TTEntry::ZERO, TTEntry::ZERO],
                 _padding: [0; 2],
             });
         }
@@ -272,8 +288,8 @@ impl TranspositionTable {
     pub fn clear(&self) {
         for cluster in &self.clusters {
             for entry in &cluster.entries {
-                entry.data64.store(0, Ordering::Relaxed);
-                entry.eval64.store(0, Ordering::Relaxed);
+                entry.store_data(0);
+                entry.store_eval(0);
             }
         }
         self.generation8.store(0, Ordering::Relaxed);
@@ -281,7 +297,8 @@ impl TranspositionTable {
 
     pub fn new_search(&self) {
         let old = self.generation8.load(Ordering::Relaxed);
-        self.generation8.store(old.wrapping_add(1) & GENERATION_MASK, Ordering::Relaxed);
+        self.generation8
+            .store(old.wrapping_add(1) & GENERATION_MASK, Ordering::Relaxed);
     }
 
     #[inline]
@@ -316,8 +333,7 @@ impl TranspositionTable {
             - 8 * i32::from(entries[0].relative_age(curr_gen));
 
         for (i, entry) in entries.iter().enumerate().skip(1) {
-            let score =
-                i32::from(entry.depth8()) - 8 * i32::from(entry.relative_age(curr_gen));
+            let score = i32::from(entry.depth8()) - 8 * i32::from(entry.relative_age(curr_gen));
             if score < replace_score {
                 replace_score = score;
                 replace_idx = i;
@@ -359,6 +375,22 @@ mod tests {
     use crate::types::Square;
 
     #[test]
+    fn test_entry_size() {
+        assert_eq!(size_of::<TTEntry>(), 10);
+    }
+
+    #[test]
+    fn test_cluster_size() {
+        assert_eq!(size_of::<Cluster>(), 32);
+    }
+
+    #[test]
+    fn test_tt_capacity_doubled() {
+        let tt = TranspositionTable::new(1);
+        assert_eq!(tt.cluster_count, 32768);
+    }
+
+    #[test]
     fn test_tt_new_and_clear() {
         let tt = TranspositionTable::new(1);
         assert!(tt.cluster_count > 0);
@@ -372,7 +404,6 @@ mod tests {
         assert_eq!(tt.generation(), 0);
         tt.new_search();
         assert_eq!(tt.generation(), 1);
-
         for _ in 0..31 {
             tt.new_search();
         }
@@ -434,8 +465,7 @@ mod tests {
     #[test]
     fn test_tt_hashfull() {
         let tt = TranspositionTable::new(1);
-        let hf = tt.hashfull(0);
-        assert_eq!(hf, 0);
+        assert_eq!(tt.hashfull(0), 0);
     }
 
     #[test]
@@ -476,8 +506,6 @@ mod tests {
     #[test]
     fn test_tt_different_keys_same_cluster() {
         let tt = TranspositionTable::new(1);
-        // Use keys with different low 16 bits so they occupy separate entries
-        // within the same cluster (same high bits → same cluster index).
         let key1: Key = 0x0000_0000_0000_0001;
         let key2: Key = 0x0000_0000_0000_0002;
         let m1 = Move::make(Square::SQ_A0, Square::SQ_A1);
