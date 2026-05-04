@@ -178,14 +178,15 @@ fn test_find_nnz_neon_matches_scalar() {
     input[24] = 100;
     input[33] = 50;
 
-    let mut nnz_scalar = Vec::new();
-    let mut nnz_dispatch = Vec::new();
-    Scalar::find_nnz(&input, &mut nnz_scalar);
+    let mut nnz_scalar = [0usize; pikarust_core::nnue::simd::MAX_NNZ];
+    let mut nnz_dispatch = [0usize; pikarust_core::nnue::simd::MAX_NNZ];
+    let count_scalar = Scalar::find_nnz(&input, &mut nnz_scalar);
 
     let d = pikarust_core::nnue::simd::Dispatch::new();
-    d.find_nnz(&input, &mut nnz_dispatch);
+    let count_dispatch = d.find_nnz(&input, &mut nnz_dispatch);
     assert_eq!(
-        nnz_scalar, nnz_dispatch,
+        &nnz_scalar[..count_scalar],
+        &nnz_dispatch[..count_dispatch],
         "find_nnz dispatch must match scalar"
     );
 }
@@ -202,15 +203,16 @@ fn test_affine_propagate_sparse_neon_matches_scalar() {
     }
     let biases = [100i32, 200, 300, 400];
 
-    let mut nnz = Vec::new();
-    Scalar::find_nnz(&input, &mut nnz);
+    let mut nnz_buf = [0usize; pikarust_core::nnue::simd::MAX_NNZ];
+    let nnz_count = Scalar::find_nnz(&input, &mut nnz_buf);
+    let nnz = &nnz_buf[..nnz_count];
 
     let mut out_scalar = [0i32; 4];
     let mut out_dispatch = [0i32; 4];
-    Scalar::affine_propagate_sparse(&input, &weights, &biases, &mut out_scalar, 4, &nnz);
+    Scalar::affine_propagate_sparse(&input, &weights, &biases, &mut out_scalar, 4, nnz);
 
     let d = pikarust_core::nnue::simd::Dispatch::new();
-    d.affine_propagate_sparse(&input, &weights, &biases, &mut out_dispatch, 4, &nnz);
+    d.affine_propagate_sparse(&input, &weights, &biases, &mut out_dispatch, 4, nnz);
     assert_eq!(
         out_scalar, out_dispatch,
         "affine_propagate_sparse dispatch must match scalar"

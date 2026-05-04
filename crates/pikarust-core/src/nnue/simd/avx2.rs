@@ -301,9 +301,10 @@ impl SimdOps for Avx2 {
         sum
     }
 
-    fn find_nnz(input: &[u8], nnz_indices: &mut Vec<usize>) {
-        nnz_indices.clear();
+    fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
         let chunks = input.len() / 4;
+        debug_assert!(chunks <= super::MAX_NNZ);
+        let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
             if input[base] != 0
@@ -311,9 +312,11 @@ impl SimdOps for Avx2 {
                 || input[base + 2] != 0
                 || input[base + 3] != 0
             {
-                nnz_indices.push(i);
+                nnz_indices[count] = i;
+                count += 1;
             }
         }
+        count
     }
 
     fn affine_propagate_sparse(

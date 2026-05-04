@@ -96,9 +96,10 @@ impl SimdOps for Scalar {
         data.iter().sum()
     }
 
-    fn find_nnz(input: &[u8], nnz_indices: &mut Vec<usize>) {
-        nnz_indices.clear();
+    fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
         let chunks = input.len() / 4;
+        debug_assert!(chunks <= super::MAX_NNZ);
+        let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
             if input[base] != 0
@@ -106,9 +107,11 @@ impl SimdOps for Scalar {
                 || input[base + 2] != 0
                 || input[base + 3] != 0
             {
-                nnz_indices.push(i);
+                nnz_indices[count] = i;
+                count += 1;
             }
         }
+        count
     }
 
     fn affine_propagate_sparse(
@@ -256,9 +259,9 @@ mod tests {
         input[1] = 5;
         input[8] = 1;
         input[11] = 2;
-        let mut nnz = Vec::new();
-        Scalar::find_nnz(&input, &mut nnz);
-        assert_eq!(nnz, vec![0, 2]);
+        let mut nnz = [0usize; crate::nnue::simd::MAX_NNZ];
+        let count = Scalar::find_nnz(&input, &mut nnz);
+        assert_eq!(&nnz[..count], &[0, 2]);
     }
 
     #[test]

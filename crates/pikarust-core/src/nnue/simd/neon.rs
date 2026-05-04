@@ -392,9 +392,10 @@ impl SimdOps for Neon {
         sum
     }
 
-    fn find_nnz(input: &[u8], nnz_indices: &mut Vec<usize>) {
-        nnz_indices.clear();
+    fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
         let chunks = input.len() / 4;
+        debug_assert!(chunks <= super::MAX_NNZ);
+        let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
             let word = u32::from_ne_bytes([
@@ -404,9 +405,11 @@ impl SimdOps for Neon {
                 input[base + 3],
             ]);
             if word != 0 {
-                nnz_indices.push(i);
+                nnz_indices[count] = i;
+                count += 1;
             }
         }
+        count
     }
 
     fn affine_propagate_sparse(

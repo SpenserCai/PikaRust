@@ -124,15 +124,15 @@ impl Network {
     fn propagate_layers(&self, ls: &LayerStackWeights, input: &[u8; TRANSFORMED_DIMS]) -> Value {
         let mut fc0_out = [0i32; FC0_OUTPUTS];
 
-        let mut nnz_indices = Vec::new();
-        self.simd.find_nnz(input, &mut nnz_indices);
+        let mut nnz_indices = [0usize; super::simd::MAX_NNZ];
+        let nnz_count = self.simd.find_nnz(input, &mut nnz_indices);
         self.simd.affine_propagate_sparse(
             input,
             &ls.fc0_weights,
             ls.fc0_biases.as_slice(),
             &mut fc0_out,
             FC0_OUTPUTS,
-            &nnz_indices,
+            &nnz_indices[..nnz_count],
         );
 
         let mut sqr_relu_out = [0u8; L2_BIG];

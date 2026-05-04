@@ -130,9 +130,9 @@ fn bench_find_nnz(c: &mut Criterion) {
 
     c.bench_function("simd_find_nnz_512", |b| {
         b.iter(|| {
-            let mut nnz = Vec::with_capacity(64);
-            d.find_nnz(criterion::black_box(&input), &mut nnz);
-            criterion::black_box(nnz)
+            let mut nnz = [0usize; pikarust_core::nnue::simd::MAX_NNZ];
+            let count = d.find_nnz(criterion::black_box(&input), &mut nnz);
+            criterion::black_box(count)
         });
     });
 }

@@ -4,6 +4,8 @@ mod avx2;
 mod neon;
 pub mod scalar;
 
+pub const MAX_NNZ: usize = super::model::TRANSFORMED_DIMS / 4;
+
 pub trait SimdOps {
     fn vec_add_i16(a: &mut [i16], b: &[i16]);
     fn vec_sub_i16(a: &mut [i16], b: &[i16]);
@@ -31,7 +33,7 @@ pub trait SimdOps {
 
     fn horizontal_sum_i32(data: &[i32]) -> i32;
 
-    fn find_nnz(input: &[u8], nnz_indices: &mut Vec<usize>);
+    fn find_nnz(input: &[u8], nnz_indices: &mut [usize; MAX_NNZ]) -> usize;
 
     fn affine_propagate_sparse(
         input: &[u8],
@@ -213,8 +215,8 @@ impl Dispatch {
     }
 
     #[inline]
-    pub fn find_nnz(&self, input: &[u8], nnz_indices: &mut Vec<usize>) {
-        dispatch!(self.backend, find_nnz, input, nnz_indices);
+    pub fn find_nnz(&self, input: &[u8], nnz_indices: &mut [usize; MAX_NNZ]) -> usize {
+        dispatch!(self.backend, find_nnz, input, nnz_indices)
     }
 
     #[inline]
@@ -341,9 +343,9 @@ mod tests {
         input[1] = 5;
         input[8] = 1;
         input[11] = 2;
-        let mut nnz = Vec::new();
-        d.find_nnz(&input, &mut nnz);
-        assert_eq!(nnz, vec![0, 2]);
+        let mut nnz = [0usize; MAX_NNZ];
+        let count = d.find_nnz(&input, &mut nnz);
+        assert_eq!(&nnz[..count], &[0, 2]);
     }
 
     #[test]
