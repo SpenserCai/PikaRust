@@ -2,6 +2,7 @@ pub mod cross_engine;
 pub mod eval_equivalence;
 pub mod search_basic;
 pub mod self_play;
+pub mod strength_gauntlet;
 pub mod uci_compliance;
 
 use std::time::{Duration, Instant};
@@ -29,6 +30,11 @@ pub trait TestCase: Send + Sync {
 
     /// Whether this test requires the Pikafish binary.
     fn requires_pikafish(&self) -> bool {
+        false
+    }
+
+    /// Whether this test is slow (excluded from default runs, requires explicit filter).
+    fn is_slow(&self) -> bool {
         false
     }
 
@@ -60,5 +66,8 @@ pub fn all_cases() -> Vec<Box<dyn TestCase>> {
         Box::new(eval_equivalence::EvalEquivalenceTest),
         Box::new(self_play::SelfPlayTest),
         Box::new(cross_engine::CrossEngineTest),
+        Box::new(strength_gauntlet::StrengthGauntletSelf),
+        Box::new(strength_gauntlet::StrengthGauntlet),
+        Box::new(strength_gauntlet::StrengthGauntletRef),
     ]
 }

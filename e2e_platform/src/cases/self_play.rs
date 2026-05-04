@@ -4,7 +4,7 @@ use crate::cases::{TestCase, TestOutcome};
 use crate::config::E2eConfig;
 use crate::error::E2eResult;
 use crate::match_driver::driver::run_match;
-use crate::match_driver::match_config::MatchConfig;
+use crate::match_driver::match_config::{MatchConfig, SearchMode};
 use crate::referee::game_result::GameResult;
 
 /// Tests `PikaRust` vs `PikaRust` self-play: full game with move legality validation.
@@ -25,9 +25,11 @@ impl TestCase for SelfPlayTest {
             black_name: "PikaRust-B".to_owned(),
             black_bin: config.pikarust_bin.clone(),
             black_cwd: config.pikarust_cwd.clone(),
-            search_depth: config.self_play_depth,
+            search_mode: SearchMode::Depth(config.self_play_depth),
             max_moves: config.max_game_moves,
             response_timeout: config.search_timeout,
+            hash_mb: 16,
+            start_fen: None,
         };
 
         let record = run_match(&match_config)?;

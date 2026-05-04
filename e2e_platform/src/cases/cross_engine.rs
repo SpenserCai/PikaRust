@@ -4,7 +4,7 @@ use crate::cases::{TestCase, TestOutcome};
 use crate::config::E2eConfig;
 use crate::error::E2eResult;
 use crate::match_driver::driver::run_match;
-use crate::match_driver::match_config::MatchConfig;
+use crate::match_driver::match_config::{MatchConfig, SearchMode};
 use crate::referee::game_result::GameResult;
 
 /// Tests `PikaRust` vs Pikafish cross-engine play with move legality validation.
@@ -29,9 +29,11 @@ impl TestCase for CrossEngineTest {
             black_name: "Pikafish".to_owned(),
             black_bin: config.pikafish_bin.clone(),
             black_cwd: config.pikafish_cwd.clone(),
-            search_depth: config.cross_engine_depth,
+            search_mode: SearchMode::Depth(config.cross_engine_depth),
             max_moves: config.max_game_moves,
             response_timeout: config.search_timeout,
+            hash_mb: 16,
+            start_fen: None,
         };
 
         let record = run_match(&match_config)?;

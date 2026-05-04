@@ -36,6 +36,11 @@ pub fn run_all(config: &E2eConfig, filter: Option<&str>) -> RunReport {
             }
         }
 
+        // Skip slow tests (e.g. strength_gauntlet) unless explicitly requested via filter.
+        if filter.is_none() && case.is_slow() {
+            continue;
+        }
+
         if case.requires_pikafish() && !pikafish_available {
             test_outcomes.push(TestOutcome {
                 name: case.name().to_owned(),

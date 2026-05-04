@@ -9,10 +9,13 @@ set -euo pipefail
 # and reports results.
 #
 # Usage:
-#   scripts/run-e2e.sh              # run all tests
-#   scripts/run-e2e.sh --filter X   # run tests matching X
+#   scripts/run-e2e.sh              # run default tests (excludes slow gauntlets)
+#   scripts/run-e2e.sh --filter X   # run tests matching X (e.g. strength_gauntlet)
 #   scripts/run-e2e.sh --list       # list available tests
 #   scripts/run-e2e.sh --clean      # remove e2e_platform build artifacts
+#
+# Slow tests (strength_gauntlet*) are excluded by default.
+# To run them: scripts/run-e2e.sh --filter strength_gauntlet
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

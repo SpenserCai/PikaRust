@@ -58,7 +58,8 @@ fn list_tests() {
         } else {
             ""
         };
-        println!("  {}{pikafish}", case.name());
+        let slow = if case.is_slow() { " [slow]" } else { "" };
+        println!("  {}{pikafish}{slow}", case.name());
     }
 }
 

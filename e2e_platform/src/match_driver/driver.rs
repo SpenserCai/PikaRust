@@ -8,7 +8,7 @@ use crate::harness::uci_io;
 use crate::referee::game_result::GameResult;
 use crate::referee::game_state::GameState;
 
-use super::match_config::MatchConfig;
+use super::match_config::{MatchConfig, SearchMode};
 
 /// Record of a completed match.
 pub struct MatchRecord {
@@ -38,13 +38,21 @@ fn play_one_move(
     white_name: &str,
     black_name: &str,
     state: &mut GameState,
-    search_depth: u32,
+    search_mode: &SearchMode,
     timeout: Duration,
     move_num: u32,
+    start_fen: Option<&str>,
 ) -> E2eResult<MoveOutcome> {
-    uci_io::set_position(engine, None, state.move_history())?;
+    uci_io::set_position(engine, start_fen, state.move_history())?;
 
-    let (bm, _infos) = uci_io::go_depth(engine, search_depth, timeout)?;
+    let (bm, _infos) = match search_mode {
+        SearchMode::Depth(d) => uci_io::go_depth(engine, *d, timeout)?,
+        SearchMode::Movetime(ms) => {
+            // Timeout = movetime + generous buffer for engine overhead
+            let effective_timeout = Duration::from_millis(*ms) + timeout;
+            uci_io::go_movetime(engine, *ms, effective_timeout)?
+        }
+    };
 
     if bm.best_move == "0000" || bm.best_move == "(none)" {
         let result = state
@@ -87,8 +95,8 @@ fn play_one_move(
 
 /// Run a complete game between two engines.
 ///
-/// Both engines are spawned, configured with Threads=1 and Hash=16 for
-/// determinism, then alternate moves until the game ends.
+/// Both engines are spawned, configured with Threads=1 and the specified Hash,
+/// then alternate moves until the game ends.
 pub fn run_match(config: &MatchConfig) -> E2eResult<MatchRecord> {
     let mut white = EngineProcess::spawn(
         &config.white_name,
@@ -109,16 +117,22 @@ pub fn run_match(config: &MatchConfig) -> E2eResult<MatchRecord> {
     uci_io::uci_handshake(&mut black, timeout)?;
 
     uci_io::set_option(&mut white, "Threads", "1")?;
-    uci_io::set_option(&mut white, "Hash", "16")?;
+    uci_io::set_option(&mut white, "Hash", &config.hash_mb.to_string())?;
     uci_io::set_option(&mut black, "Threads", "1")?;
-    uci_io::set_option(&mut black, "Hash", "16")?;
+    uci_io::set_option(&mut black, "Hash", &config.hash_mb.to_string())?;
 
     uci_io::new_game(&mut white)?;
     uci_io::new_game(&mut black)?;
     uci_io::sync_engine(&mut white, timeout)?;
     uci_io::sync_engine(&mut black, timeout)?;
 
-    let mut state = GameState::new()?;
+    let mut state = if let Some(ref fen) = config.start_fen {
+        GameState::from_fen(fen)?
+    } else {
+        GameState::new()?
+    };
+
+    let start_fen = config.start_fen.as_deref();
 
     for move_num in 1..=config.max_moves {
         for side in &[Color::White, Color::Black] {
@@ -138,9 +152,10 @@ pub fn run_match(config: &MatchConfig) -> E2eResult<MatchRecord> {
                 &config.white_name,
                 &config.black_name,
                 &mut state,
-                config.search_depth,
+                &config.search_mode,
                 timeout,
                 move_num,
+                start_fen,
             )?;
 
             if let MoveOutcome::Finished(record) = outcome {
