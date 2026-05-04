@@ -85,6 +85,30 @@ impl Position {
         self.by_color_bb[c] & self.pieces_by_types(pts)
     }
 
+    pub fn attacks_by(&self, pt: PieceType, c: Color) -> Bitboard {
+        use crate::bitboard::{
+            attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight, attacks_bb_rook,
+            pawn_attacks_bb,
+        };
+
+        let mut threats = Bitboard::EMPTY;
+        let mut attackers = self.pieces(c, pt);
+        let occ = self.all_pieces();
+        while attackers.is_not_empty() {
+            let sq = attackers.pop_lsb();
+            threats |= match pt {
+                PieceType::Pawn => pawn_attacks_bb(c, sq),
+                PieceType::Rook => attacks_bb_rook(sq, occ),
+                PieceType::Cannon => attacks_bb_cannon(sq, occ),
+                PieceType::Knight => attacks_bb_knight(sq, occ),
+                PieceType::Bishop => attacks_bb_bishop(sq, occ),
+                PieceType::Advisor => self.pseudo_attacks_advisor(sq),
+                PieceType::King => self.pseudo_attacks_king(sq),
+            };
+        }
+        threats
+    }
+
     #[inline]
     pub fn king_square(&self, c: Color) -> Square {
         let king_bb = self.pieces(c, PieceType::King);

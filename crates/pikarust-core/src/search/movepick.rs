@@ -1,4 +1,4 @@
-use crate::bitboard::line_bb;
+use crate::bitboard::{Bitboard, line_bb};
 use crate::position::Position;
 use crate::types::{Depth, Move, PIECE_VALUE, PieceType, Value};
 
@@ -257,16 +257,27 @@ impl MovePicker {
 
     #[allow(unsafe_code)]
     fn score_quiets(&mut self, pos: &Position) {
+        use crate::bitboard::square_bb;
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Quiets);
         let us = pos.side_to_move();
+        let them = !us;
 
         // SAFETY: All pointers are valid for the lifetime of the search call.
         let main_hist = unsafe { &*self.main_history };
         let low_ply_hist = unsafe { &*self.low_ply_history };
 
+        let threat_by_advisor_bishop = pos.attacks_by(PieceType::Pawn, them);
+        let threat_by_knight_cannon = threat_by_advisor_bishop
+            | pos.attacks_by(PieceType::Advisor, them)
+            | pos.attacks_by(PieceType::Bishop, them);
+        let threat_by_rook = threat_by_knight_cannon
+            | pos.attacks_by(PieceType::Knight, them)
+            | pos.attacks_by(PieceType::Cannon, them);
+
         for i in 0..ml.len() {
             let m = ml.get(i);
+            let from = m.from_sq();
             let to = m.to_sq();
             let pc = pos.moved_piece(m);
             let pt = pc.piece_type();
@@ -289,7 +300,6 @@ impl MovePicker {
 
             let check_sq = pos.check_squares(pt);
             let gives_check = if pt == PieceType::Cannon {
-                let from = m.from_sq();
                 let ksq = pos.king_square(!us);
                 (check_sq & !line_bb(from, ksq) & to).is_not_empty()
             } else {
@@ -299,6 +309,19 @@ impl MovePicker {
             if gives_check && pos.see_ge(m, -75) {
                 score += 16384;
             }
+
+            let threat = match pt {
+                PieceType::Advisor | PieceType::Bishop => threat_by_advisor_bishop,
+                PieceType::Knight | PieceType::Cannon => threat_by_knight_cannon,
+                PieceType::Rook => threat_by_rook,
+                _ => Bitboard::EMPTY,
+            };
+            let from_bb = square_bb(from);
+            let to_bb = square_bb(to);
+            let v = 20
+                * (i32::from((threat & from_bb).is_not_empty())
+                    - i32::from((threat & to_bb).is_not_empty()));
+            score += PIECE_VALUE[pc] * v;
 
             if (self.ply as usize) < LOW_PLY_HISTORY_SIZE {
                 score += 8 * i32::from(low_ply_hist.get(self.ply as usize, m)) / (1 + self.ply);
