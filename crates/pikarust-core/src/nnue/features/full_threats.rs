@@ -53,7 +53,7 @@ struct ThreatOffsetTable {
 
 impl ThreatOffsetTable {
     fn new() -> Self {
-        let pseudo_attacks = PseudoAttacksTable::new();
+        let pseudo_attacks = crate::bitboard::pseudo_attacks();
         let valid_bb = &*VALID_BB;
 
         #[allow(clippy::large_stack_arrays)]
@@ -175,7 +175,7 @@ pub fn append_active_indices(pos: &Position, perspective: Color, active: &mut In
     let mirror = entry.mirror;
     let occupied = pos.all_pieces();
 
-    let pseudo_attacks = PseudoAttacksTable::new();
+    let pseudo_attacks = crate::bitboard::pseudo_attacks();
 
     let mut bb = occupied;
     while bb.is_not_empty() {
@@ -190,7 +190,7 @@ pub fn append_active_indices(pos: &Position, perspective: Color, active: &mut In
         let attacks = if pt == PieceType::Pawn {
             pawn_attacks_bb(c, from)
         } else {
-            attacks_bb_with_occ(&pseudo_attacks, pt, from, occupied)
+            attacks_bb_with_occ(pseudo_attacks, pt, from, occupied)
         };
 
         let mut attack_bb = attacks & occupied;
@@ -227,13 +227,17 @@ fn attacks_bb_with_occ(
 pub fn append_changed_indices(
     perspective: Color,
     mirror: bool,
-    threats: &[(Piece, Piece, Square, Square, bool)],
+    dirty: &crate::nnue::accumulator::DirtyThreats,
     removed: &mut IndexList,
     added: &mut IndexList,
 ) {
-    for &(attacker, victim, from, to, is_add) in threats {
+    for dt in dirty.as_slice() {
+        let attacker = Piece::from_raw(dt.pc_raw());
+        let victim = Piece::from_raw(dt.threatened_pc_raw());
+        let from = Square::from_raw_unchecked(dt.pc_sq_raw());
+        let to = Square::from_raw_unchecked(dt.threatened_sq_raw());
         let index = make_index(perspective, attacker, from, to, victim, mirror);
-        if is_add {
+        if dt.is_add() {
             added.push_if_lt(index, DIMENSIONS);
         } else {
             removed.push_if_lt(index, DIMENSIONS);

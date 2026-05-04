@@ -6,6 +6,25 @@ use super::zobrist::zobrist;
 
 impl Position {
     pub fn do_move(&mut self, m: Move, gives_check: bool) {
+        self.do_move_inner(m, gives_check, None);
+    }
+
+    /// Like `do_move` but also computes `DirtyThreats` using Pikafish's capture path.
+    pub fn do_move_with_threats(
+        &mut self,
+        m: Move,
+        gives_check: bool,
+        dts: &mut crate::nnue::DirtyThreats,
+    ) {
+        self.do_move_inner(m, gives_check, Some(dts));
+    }
+
+    fn do_move_inner(
+        &mut self,
+        m: Move,
+        gives_check: bool,
+        mut dts: Option<&mut crate::nnue::DirtyThreats>,
+    ) {
         let z = zobrist();
 
         self.bloom_filter.insert(self.state.key);
@@ -56,8 +75,6 @@ impl Position {
 
             new_state.check10 = [0; Color::NUM];
             new_state.rule60 = 0;
-
-            self.remove_piece(to);
         }
 
         k ^= z.psq[pc.index()][from.index()] ^ z.psq[pc.index()][to.index()];
@@ -75,7 +92,41 @@ impl Position {
             }
         }
 
-        self.move_piece(from, to);
+        // Board updates
+        if let Some(ref mut dt) = dts {
+            // Pikafish: compute mirror_before BEFORE board changes
+            let mirror_before = [
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(us, self).1,
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(them, self).1,
+            ];
+
+            self.update_piece_threats::<true>(pc, false, from, dt);
+            #[allow(clippy::if_not_else)]
+            if captured != Piece::NONE {
+                self.remove_piece(from);
+                self.remove_piece(to);
+                self.update_piece_threats::<false>(captured, false, to, dt);
+                self.put_piece(pc, to);
+                self.update_piece_threats::<false>(pc, true, to, dt);
+            } else {
+                self.move_piece(from, to);
+                self.update_piece_threats::<true>(pc, true, to, dt);
+            }
+
+            // Pikafish: compute mirror_after AFTER board changes, set requires_refresh
+            let mirror_after = [
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(us, self).1,
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(them, self).1,
+            ];
+            dt.requires_refresh[us as usize] |= mirror_before[0] != mirror_after[0];
+            dt.requires_refresh[them as usize] |= mirror_before[1] != mirror_after[1];
+        } else {
+            // Original path
+            if captured != Piece::NONE {
+                self.remove_piece(to);
+            }
+            self.move_piece(from, to);
+        }
 
         new_state.captured_piece = captured;
 
@@ -424,6 +475,41 @@ mod tests {
                     pos.fen(),
                     original_fen,
                     "FEN mismatch for {m:?} in FEN: {fen}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_do_move_with_threats_same_board_state() {
+        use crate::nnue::DirtyThreats;
+
+        let fens = [
+            START_FEN,
+            "r1ba1a3/4kn3/2n1b4/pNp1p1p1p/4c4/6P2/P1P2R2P/1CcC5/9/2BAKAB2 w - - 0 1",
+            "2bak4/9/3a5/p2Np3p/3n1P3/3pc3P/P4r1c1/B2CC2R1/4A4/3AK1B2 b - - 0 1",
+            "5a3/3k5/3aR4/9/5r3/5n3/9/3A1A3/5K3/2BC2B2 w - - 0 1",
+        ];
+
+        for fen in &fens {
+            let pos_ref = Position::from_fen(fen).unwrap();
+            let ml = generate(&pos_ref, GenType::Legal);
+
+            for i in 0..ml.len() {
+                let m = ml.get(i);
+
+                let mut pos1 = Position::from_fen(fen).unwrap();
+                let gc1 = pos1.gives_check(m);
+                pos1.do_move(m, gc1);
+
+                let mut pos2 = Position::from_fen(fen).unwrap();
+                let gc2 = pos2.gives_check(m);
+                let mut dts = DirtyThreats::new();
+                pos2.do_move_with_threats(m, gc2, &mut dts);
+
+                assert_eq!(
+                    pos1.fen(), pos2.fen(),
+                    "FEN mismatch for {m:?} in {fen}"
                 );
             }
         }

@@ -611,8 +611,7 @@ impl Worker {
                     let pc_gives_check = self.root_pos.gives_check(pc_move);
                     self.ss_current_moves[ss] = pc_move;
                     self.ss_in_check[ss] = pc_gives_check;
-                    self.push_acc_for_move(pc_move);
-                    self.root_pos.do_move(pc_move, pc_gives_check);
+                    self.push_acc_for_move(pc_move, pc_gives_check);
                     self.inc_nodes();
 
                     // Preliminary qsearch to verify the move holds
@@ -899,8 +898,7 @@ impl Worker {
             self.ss_current_moves[ss] = m;
             self.ss_in_check[ss] = gives_check;
             self.set_cont_hist_index(ply, in_check, capture, moved_piece, m.to_sq());
-            self.push_acc_for_move(m);
-            self.root_pos.do_move(m, gives_check);
+            self.push_acc_for_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_ab");
             self.inc_nodes();
 

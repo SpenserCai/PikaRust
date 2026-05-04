@@ -34,7 +34,42 @@ pub use tables::{
     safe_destination, shift, square_bb, square_distance,
 };
 
+use std::sync::LazyLock;
+
 use crate::types::Square;
+
+static PSEUDO_ATTACKS: LazyLock<PseudoAttacksTable> = LazyLock::new(PseudoAttacksTable::new);
+
+/// Returns a reference to the shared, lazily-initialized pseudo-attacks table.
+#[inline]
+pub fn pseudo_attacks() -> &'static PseudoAttacksTable {
+    &PSEUDO_ATTACKS
+}
+
+static LEAPER_PASS_TABLE: LazyLock<[[Bitboard; Square::NUM]; Square::NUM]> = LazyLock::new(|| {
+    let pseudo = pseudo_attacks();
+    let mut table = [[Bitboard::EMPTY; Square::NUM]; Square::NUM];
+    for (s1_idx, row) in table.iter_mut().enumerate() {
+        let s1 = Square::from_raw_unchecked(s1_idx as u8);
+        for (s2_idx, cell) in row.iter_mut().enumerate() {
+            let s2 = Square::from_raw_unchecked(s2_idx as u8);
+            if (pseudo.unconstrained_king(s1) & Bitboard::from(s2)).is_not_empty() {
+                *cell |=
+                    pseudo.get(crate::types::PieceType::Knight, s1) & pseudo.unconstrained_advisor(s2);
+            }
+            if (pseudo.unconstrained_advisor(s1) & Bitboard::from(s2)).is_not_empty() {
+                *cell |=
+                    pseudo.get(crate::types::PieceType::Bishop, s1) & pseudo.unconstrained_advisor(s2);
+            }
+        }
+    }
+    table
+});
+
+#[inline]
+pub fn leaper_pass_bb(s1: Square, s2: Square) -> Bitboard {
+    LEAPER_PASS_TABLE[s1.index()][s2.index()]
+}
 
 pub fn between_bb(s1: Square, s2: Square) -> Bitboard {
     let pseudo_rook_s1 = attacks_bb_rook(s1, Bitboard::EMPTY);
