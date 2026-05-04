@@ -686,8 +686,8 @@ impl Worker {
         }
 
         // Moves loop — build contHist from search stack
-        let cont_hist_refs = self.build_cont_hist_for_movepicker(ply);
-        let cont_hist_slice: Vec<&super::history::PieceToHistory> = cont_hist_refs;
+        let (cont_hist_buf, cont_hist_len) = self.build_cont_hist_for_movepicker(ply);
+        let cont_hist_slice = &cont_hist_buf[..cont_hist_len];
 
         let mut mp = MovePicker::new_main(
             &self.root_pos,
@@ -704,8 +704,10 @@ impl Worker {
         let mut best_value = -VALUE_INFINITE;
         let mut best_move = Move::NONE;
         let mut move_count = 0i32;
-        let mut quiets_searched = Vec::with_capacity(SEARCHED_LIST_CAPACITY);
-        let mut captures_searched = Vec::with_capacity(SEARCHED_LIST_CAPACITY);
+        let mut quiets_searched = [Move::NONE; SEARCHED_LIST_CAPACITY];
+        let mut quiets_count = 0usize;
+        let mut captures_searched = [Move::NONE; SEARCHED_LIST_CAPACITY];
+        let mut captures_count = 0usize;
 
         // Compute correction value once before moves loop (on parent position)
         let correction_val = self.correction_value(ply);
@@ -1111,9 +1113,13 @@ impl Worker {
 
             if m != best_move && move_count <= SEARCHED_LIST_CAPACITY as i32 {
                 if capture {
-                    captures_searched.push(m);
-                } else {
-                    quiets_searched.push(m);
+                    if captures_count < SEARCHED_LIST_CAPACITY {
+                        captures_searched[captures_count] = m;
+                        captures_count += 1;
+                    }
+                } else if quiets_count < SEARCHED_LIST_CAPACITY {
+                    quiets_searched[quiets_count] = m;
+                    quiets_count += 1;
                 }
             }
         }
@@ -1137,8 +1143,8 @@ impl Worker {
                 ply,
                 best_move,
                 prev_sq,
-                &quiets_searched,
-                &captures_searched,
+                &quiets_searched[..quiets_count],
+                &captures_searched[..captures_count],
                 depth,
                 tt_data.tt_move,
             );

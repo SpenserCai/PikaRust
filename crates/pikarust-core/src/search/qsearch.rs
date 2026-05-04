@@ -143,9 +143,8 @@ impl Worker {
         };
 
         // Move generation — build contHist from search stack (only ss-1 for qsearch)
-        let cont_hist_refs = self.build_cont_hist_for_movepicker(ply);
-        // qsearch only uses the first entry, but pass all available
-        let cont_hist_slice: Vec<&super::history::PieceToHistory> = cont_hist_refs;
+        let (cont_hist_buf, cont_hist_len) = self.build_cont_hist_for_movepicker(ply);
+        let cont_hist_slice = &cont_hist_buf[..cont_hist_len];
 
         let mut mp = MovePicker::new_main(
             &self.root_pos,

@@ -288,21 +288,28 @@ impl Worker {
     /// Build the contHist array for `MovePicker` from the search stack.
     /// Returns up to 6 references to `PieceToHistory` tables.
     /// Matches C++ `contHist[] = {(ss-1)->continuationHistory, ..., (ss-6)->continuationHistory}`.
-    pub fn build_cont_hist_for_movepicker(&self, ply: i32) -> Vec<&super::history::PieceToHistory> {
+    pub fn build_cont_hist_for_movepicker(
+        &self,
+        ply: i32,
+    ) -> ([&super::history::PieceToHistory; 6], usize) {
         let ss = self.ss_idx(ply);
-        let mut result = Vec::with_capacity(6);
+        // Use a sentinel reference for unused slots (never read past `len`).
+        let sentinel = self.continuation_history.get(false, false, crate::types::Piece::NONE, crate::types::Square::SQ_A0);
+        let mut buf = [sentinel; 6];
+        let mut len = 0;
         for offset in 1..=6 {
             if ss >= offset {
                 let idx = self.ss_cont_hist_indices[ss - offset];
-                result.push(self.continuation_history.get(
+                buf[len] = self.continuation_history.get(
                     idx.in_check,
                     idx.capture,
                     idx.pc,
                     idx.sq,
-                ));
+                );
+                len += 1;
             }
         }
-        result
+        (buf, len)
     }
 
     /// Set the continuation history index for the current ply after making a move.
