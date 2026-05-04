@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use crate::types::{Bound, DEPTH_NONE, Depth, Key, Move, VALUE_NONE, Value};
 
@@ -198,7 +198,7 @@ impl TTWriter {
 pub struct TranspositionTable {
     clusters: Vec<Cluster>,
     cluster_count: usize,
-    generation8: u8,
+    generation8: AtomicU8,
 }
 
 // SAFETY: All access to entries is through AtomicU64 with Relaxed ordering.
@@ -236,7 +236,7 @@ impl TranspositionTable {
         Self {
             clusters,
             cluster_count,
-            generation8: 0,
+            generation8: AtomicU8::new(0),
         }
     }
 
@@ -266,26 +266,27 @@ impl TranspositionTable {
             });
         }
         self.cluster_count = cluster_count;
-        self.generation8 = 0;
+        self.generation8.store(0, Ordering::Relaxed);
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         for cluster in &self.clusters {
             for entry in &cluster.entries {
                 entry.data64.store(0, Ordering::Relaxed);
                 entry.eval64.store(0, Ordering::Relaxed);
             }
         }
-        self.generation8 = 0;
+        self.generation8.store(0, Ordering::Relaxed);
     }
 
-    pub const fn new_search(&mut self) {
-        self.generation8 = self.generation8.wrapping_add(1) & GENERATION_MASK;
+    pub fn new_search(&self) {
+        let old = self.generation8.load(Ordering::Relaxed);
+        self.generation8.store(old.wrapping_add(1) & GENERATION_MASK, Ordering::Relaxed);
     }
 
     #[inline]
-    pub const fn generation(&self) -> u8 {
-        self.generation8
+    pub fn generation(&self) -> u8 {
+        self.generation8.load(Ordering::Relaxed)
     }
 
     fn first_entry(&self, key: Key) -> &[TTEntry; CLUSTER_SIZE] {
@@ -310,12 +311,13 @@ impl TranspositionTable {
         }
 
         let mut replace_idx = 0usize;
+        let curr_gen = self.generation8.load(Ordering::Relaxed);
         let mut replace_score = i32::from(entries[0].depth8())
-            - 8 * i32::from(entries[0].relative_age(self.generation8));
+            - 8 * i32::from(entries[0].relative_age(curr_gen));
 
         for (i, entry) in entries.iter().enumerate().skip(1) {
             let score =
-                i32::from(entry.depth8()) - 8 * i32::from(entry.relative_age(self.generation8));
+                i32::from(entry.depth8()) - 8 * i32::from(entry.relative_age(curr_gen));
             if score < replace_score {
                 replace_score = score;
                 replace_idx = i;
@@ -333,10 +335,11 @@ impl TranspositionTable {
 
     pub fn hashfull(&self, max_age: u8) -> i32 {
         let sample = self.cluster_count.min(1000);
+        let curr_gen = self.generation8.load(Ordering::Relaxed);
         let mut cnt = 0;
         for i in 0..sample {
             for entry in &self.clusters[i].entries {
-                if entry.is_occupied() && entry.relative_age(self.generation8) <= max_age {
+                if entry.is_occupied() && entry.relative_age(curr_gen) <= max_age {
                     cnt += 1;
                 }
             }
@@ -357,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_tt_new_and_clear() {
-        let mut tt = TranspositionTable::new(1);
+        let tt = TranspositionTable::new(1);
         assert!(tt.cluster_count > 0);
         tt.clear();
         assert_eq!(tt.generation(), 0);
@@ -365,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_tt_new_search_generation() {
-        let mut tt = TranspositionTable::new(1);
+        let tt = TranspositionTable::new(1);
         assert_eq!(tt.generation(), 0);
         tt.new_search();
         assert_eq!(tt.generation(), 1);
@@ -463,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_tt_generation_wraps() {
-        let mut tt = TranspositionTable::new(1);
+        let tt = TranspositionTable::new(1);
         for _ in 0..100 {
             tt.new_search();
         }

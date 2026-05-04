@@ -66,6 +66,7 @@ impl ThreadPool {
 
     pub fn clear(&mut self) {
         self.recover_workers();
+        self.tt.clear();
         for w in &mut self.workers {
             w.clear();
         }
@@ -106,9 +107,7 @@ impl ThreadPool {
         self.ponder.store(limits.ponder_mode, Ordering::SeqCst);
         self.increase_depth.store(true, Ordering::SeqCst);
         self.tot_best_move_changes.store(0, Ordering::SeqCst);
-        if let Some(tt) = Arc::get_mut(&mut self.tt) {
-            tt.new_search();
-        }
+        self.tt.new_search();
 
         let root_moves = build_root_moves(pos, limits);
 
