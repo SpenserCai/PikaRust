@@ -161,7 +161,7 @@ pub fn update_threat_accumulator_incremental(
         let c = perspective as usize;
 
         if dirty.requires_refresh[c] || !prev.computed[c] {
-            // Fall back to full refresh
+            // Fall back to full refresh for this perspective
             let mut active = IndexList::new();
             full_threats::append_active_indices(pos, perspective, &mut active);
 
