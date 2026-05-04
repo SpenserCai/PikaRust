@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::nnue::features::half_ka_v2_hm;
-use crate::nnue::{AccumulatorStack, DiffType, DirtyPiece, Network};
+use crate::nnue::{AccumulatorStack, DiffType, DirtyPiece, DirtyThreats, Network};
 use crate::position::Position;
 use crate::types::{
     Color, Depth, MAX_PLY, Move, Piece, PieceType, Square, VALUE_DRAW, VALUE_INFINITE,
@@ -323,10 +323,7 @@ impl Worker {
         if !threat_computed {
             let acc = &mut self.acc_stack.current_threat_mut().acc;
             crate::nnue::feature_transformer::refresh_threat_accumulator(
-                net.model(),
-                &self.root_pos,
-                acc,
-                net.simd(),
+                net.model(), &self.root_pos, acc, net.simd(),
             );
         }
 
@@ -402,8 +399,9 @@ impl Worker {
         let mirror_before_us = half_ka_v2_hm::make_feature_bucket(us, &self.root_pos).1;
         let mirror_before_them = half_ka_v2_hm::make_feature_bucket(them, &self.root_pos).1;
 
-        // Do the move
-        self.root_pos.do_move(m, gives_check);
+        // Do the move (with threat diff computation)
+        let mut dts = DirtyThreats::new();
+        self.root_pos.do_move_with_threats(m, gives_check, &mut dts);
 
         // Pikafish: dp.requires_refresh[c] |= (mirror_before[c] != mirror_after[c])
         let mirror_after_us = half_ka_v2_hm::make_feature_bucket(us, &self.root_pos).1;
@@ -413,6 +411,7 @@ impl Worker {
 
         self.acc_stack.push();
         self.acc_stack.set_psq_diff(dirty);
+        self.acc_stack.set_threat_diff(dts);
     }
 
     pub fn push_acc(&mut self) {

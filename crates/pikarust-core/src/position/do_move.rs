@@ -94,6 +94,12 @@ impl Position {
 
         // Board updates
         if let Some(ref mut dt) = dts {
+            // Pikafish: compute mirror_before BEFORE board changes
+            let mirror_before = [
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(us, self).1,
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(them, self).1,
+            ];
+
             self.update_piece_threats::<true>(pc, false, from, dt);
             #[allow(clippy::if_not_else)]
             if captured != Piece::NONE {
@@ -106,6 +112,14 @@ impl Position {
                 self.move_piece(from, to);
                 self.update_piece_threats::<true>(pc, true, to, dt);
             }
+
+            // Pikafish: compute mirror_after AFTER board changes, set requires_refresh
+            let mirror_after = [
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(us, self).1,
+                crate::nnue::features::half_ka_v2_hm::make_feature_bucket(them, self).1,
+            ];
+            dt.requires_refresh[us as usize] |= mirror_before[0] != mirror_after[0];
+            dt.requires_refresh[them as usize] |= mirror_before[1] != mirror_after[1];
         } else {
             // Original path
             if captured != Piece::NONE {
