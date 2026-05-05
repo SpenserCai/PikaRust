@@ -11,18 +11,21 @@ export function AnalysisPanel({ analysis }: Props) {
   return (
     <Panel title="Analysis">
       <div className="font-mono text-sm space-y-2">
-        <div className="flex gap-4 text-[var(--color-text-dim)]">
-          <span>d={currentDepth}</span>
-          <span className="text-[var(--color-accent)] font-bold">{formattedScore}</span>
-          <span>{nodes > 0 ? `${(nodes / 1000).toFixed(0)}k` : '—'}</span>
-          <span>{nps > 0 ? `${(nps / 1000).toFixed(0)}kn/s` : ''}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-[var(--color-text-dim)]">d={currentDepth}</span>
+          <span className="text-lg text-[var(--color-accent)] font-bold">{formattedScore}</span>
+        </div>
+        <div className="flex gap-3 text-xs text-[var(--color-text-dim)]">
+          {nodes > 0 && <span>nodes: {formatNumber(nodes)}</span>}
+          {nps > 0 && <span>nps: {formatNumber(nps)}</span>}
         </div>
 
         {wdl && <WdlBar wdl={wdl} />}
 
         {pv && (
-          <div className="text-xs text-[var(--color-text-dim)] break-all leading-relaxed">
-            <span className="text-[var(--color-text)]">PV:</span> {pv}
+          <div className="text-xs text-[var(--color-text-dim)] break-all leading-relaxed pt-1 border-t border-[var(--color-border)]">
+            <span className="text-[var(--color-text)] font-bold">PV</span>{' '}
+            <span className="opacity-80">{pv}</span>
           </div>
         )}
       </div>
@@ -37,10 +40,23 @@ function WdlBar({ wdl }: { wdl: [number, number, number] }) {
   const d = (wdl[1] / total) * 100;
 
   return (
-    <div className="h-2 rounded-full overflow-hidden flex bg-[var(--color-border)]">
-      <div className="bg-white" style={{ width: `${w}%` }} />
-      <div className="bg-gray-500" style={{ width: `${d}%` }} />
-      <div className="bg-gray-900 flex-1" />
+    <div className="space-y-1">
+      <div className="h-2 rounded-full overflow-hidden flex bg-[var(--color-border)]">
+        <div className="bg-[var(--color-red-piece)] transition-all duration-300" style={{ width: `${w}%` }} />
+        <div className="bg-gray-500 transition-all duration-300" style={{ width: `${d}%` }} />
+        <div className="bg-[var(--color-black-piece)] flex-1 transition-all duration-300" />
+      </div>
+      <div className="flex justify-between text-[10px] text-[var(--color-text-dim)]">
+        <span>W {wdl[0]}‰</span>
+        <span>D {wdl[1]}‰</span>
+        <span>L {wdl[2]}‰</span>
+      </div>
     </div>
   );
+}
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
 }

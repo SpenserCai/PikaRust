@@ -91,6 +91,10 @@ export function useEngine() {
           bestMoveIdRef.current += 1;
           setBestMove(msg.bestMove ? { move: msg.bestMove, id: bestMoveIdRef.current } : null);
         }
+        if (msg.type === 'uciok') {
+          ws.send('setoption name UCI_ShowWDL value true');
+          ws.send('isready');
+        }
         handlersRef.current.forEach((h) => h(msg));
       }
     };

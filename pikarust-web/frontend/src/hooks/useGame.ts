@@ -9,6 +9,7 @@ export interface GameState {
   moveHistory: string[];
   currentSide: Side;
   gameOver: boolean;
+  thinking: boolean;
 }
 
 type GameAction =
@@ -16,24 +17,31 @@ type GameAction =
   | { type: 'NEW_GAME' }
   | { type: 'UNDO' }
   | { type: 'SET_POSITION'; fen: string }
-  | { type: 'GAME_OVER' };
+  | { type: 'GAME_OVER' }
+  | { type: 'SET_THINKING'; thinking: boolean };
 
 function flipSide(s: Side): Side { return s === 'w' ? 'b' : 'w'; }
 
 function reducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'MOVE':
-      return { ...state, moveHistory: [...state.moveHistory, action.move], currentSide: flipSide(state.currentSide) };
+      return { ...state, moveHistory: [...state.moveHistory, action.move], currentSide: flipSide(state.currentSide), thinking: false };
     case 'NEW_GAME':
-      return { fen: START_FEN, moveHistory: [], currentSide: 'w', gameOver: false };
+      return { fen: START_FEN, moveHistory: [], currentSide: 'w', gameOver: false, thinking: false };
     case 'UNDO': {
-      if (state.moveHistory.length === 0) return state;
-      return { ...state, moveHistory: state.moveHistory.slice(0, -1), currentSide: flipSide(state.currentSide) };
+      // Undo 2 plies (human + AI) if possible, otherwise 1
+      const count = state.moveHistory.length >= 2 ? 2 : state.moveHistory.length;
+      if (count === 0) return state;
+      const newHistory = state.moveHistory.slice(0, -count);
+      const newSide = count % 2 === 0 ? state.currentSide : flipSide(state.currentSide);
+      return { ...state, moveHistory: newHistory, currentSide: newSide, thinking: false };
     }
     case 'SET_POSITION':
-      return { fen: action.fen, moveHistory: [], currentSide: (action.fen.split(' ')[1] as Side) || 'w', gameOver: false };
+      return { fen: action.fen, moveHistory: [], currentSide: (action.fen.split(' ')[1] as Side) || 'w', gameOver: false, thinking: false };
     case 'GAME_OVER':
-      return { ...state, gameOver: true };
+      return { ...state, gameOver: true, thinking: false };
+    case 'SET_THINKING':
+      return { ...state, thinking: action.thinking };
   }
 }
 
@@ -46,7 +54,7 @@ function toUci(from: [number, number], to: [number, number]): string {
 }
 
 export function useGame(sendCommand: (cmd: string) => void, depth: number = 12, movetime: number = 0) {
-  const [state, dispatch] = useReducer(reducer, { fen: START_FEN, moveHistory: [], currentSide: 'w', gameOver: false });
+  const [state, dispatch] = useReducer(reducer, { fen: START_FEN, moveHistory: [], currentSide: 'w', gameOver: false, thinking: false });
   const depthRef = useRef(depth);
   depthRef.current = depth;
   const movetimeRef = useRef(movetime);
@@ -55,6 +63,7 @@ export function useGame(sendCommand: (cmd: string) => void, depth: number = 12, 
   const makeMove = useCallback((from: [number, number], to: [number, number]) => {
     const move = toUci(from, to);
     dispatch({ type: 'MOVE', move });
+    dispatch({ type: 'SET_THINKING', thinking: true });
     const moves = [...state.moveHistory, move].join(' ');
     sendCommand(`position fen ${state.fen} moves ${moves}`);
     if (movetimeRef.current > 0) {
@@ -71,9 +80,12 @@ export function useGame(sendCommand: (cmd: string) => void, depth: number = 12, 
   const newGame = useCallback(() => {
     dispatch({ type: 'NEW_GAME' });
     sendCommand('ucinewgame');
+    sendCommand('setoption name UCI_ShowWDL value true');
   }, [sendCommand]);
 
-  const undo = useCallback(() => { dispatch({ type: 'UNDO' }); }, []);
+  const undo = useCallback(() => {
+    dispatch({ type: 'UNDO' });
+  }, []);
 
   const setPosition = useCallback((fen: string) => { dispatch({ type: 'SET_POSITION', fen }); }, []);
 
