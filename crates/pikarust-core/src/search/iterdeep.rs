@@ -754,7 +754,7 @@ impl Worker {
             // === Step 13: Pruning at shallow depths ===
 
             // 13a. Calculate lmrDepth for use in all Step 13 pruning
-            let lmr_depth = (new_depth - r / 1005).max(0);
+            let lmr_depth = new_depth - r / 1005;
 
             // 13b. LMP: use skip_quiet_moves instead of hard continue
             if !ROOT
