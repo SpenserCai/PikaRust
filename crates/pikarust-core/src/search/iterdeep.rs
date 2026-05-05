@@ -280,6 +280,7 @@ impl Worker {
         depth = depth.min(MAX_PLY - 1);
 
         let in_check = self.root_pos.checkers().is_not_empty();
+        self.ss_in_check[ss] = in_check;
         let us = self.root_pos.side_to_move();
 
         if self.is_main_thread() {
@@ -622,7 +623,8 @@ impl Worker {
 
                     let pc_gives_check = self.root_pos.gives_check(pc_move);
                     self.ss_current_moves[ss] = pc_move;
-                    self.ss_in_check[ss] = pc_gives_check;
+                    let pc_moved_piece = self.root_pos.moved_piece(pc_move);
+                    self.set_cont_hist_index(ply, in_check, true, pc_moved_piece, pc_move.to_sq());
                     self.push_acc_for_move(pc_move, pc_gives_check);
                     self.inc_nodes();
 
@@ -909,7 +911,6 @@ impl Worker {
 
             // Make move
             self.ss_current_moves[ss] = m;
-            self.ss_in_check[ss] = gives_check;
             self.set_cont_hist_index(ply, in_check, capture, moved_piece, m.to_sq());
             self.push_acc_for_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_ab");
