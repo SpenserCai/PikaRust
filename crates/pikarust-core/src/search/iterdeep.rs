@@ -413,8 +413,6 @@ impl Worker {
 
         // evalDiff history update is done after TT cutoff (see below in !in_check block)
         let opponent_worsening = ss >= 1
-            && is_valid(self.ss_static_evals[ss])
-            && is_valid(self.ss_static_evals[ss - 1])
             && self.ss_static_evals[ss] > -self.ss_static_evals[ss - 1];
 
         // Depth adjustments based on priorReduction/opponentWorsening
@@ -424,9 +422,7 @@ impl Worker {
         }
         if prior_reduction >= 2
             && depth >= 2
-            && is_valid(self.ss_static_evals[ss])
             && ss >= 1
-            && is_valid(self.ss_static_evals[ss - 1])
             && self.ss_static_evals[ss] + self.ss_static_evals[ss - 1] > 193
         {
             depth -= 1;
