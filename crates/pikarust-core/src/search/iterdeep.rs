@@ -501,8 +501,6 @@ impl Worker {
                 && self.ss_current_moves[ss - 1].is_ok()
                 && !self.ss_in_check[ss - 1]
                 && !prior_capture
-                && is_valid(self.ss_static_evals[ss])
-                && is_valid(self.ss_static_evals[ss - 1])
             {
                 let eval_diff = (-(self.ss_static_evals[ss - 1] + self.ss_static_evals[ss]))
                     .clamp(-110, 187)
@@ -773,7 +771,6 @@ impl Worker {
                 && !is_loss(best_value)
                 && !gives_check
                 && lmr_depth < 19
-                && !in_check
                 && capture
             {
                 let capt_hist = self.capture_history.get(
