@@ -18,6 +18,14 @@ impl Worker {
         self.ss_in_check[ss] = in_check;
         let mut move_count = 0;
 
+        // PV node: clear child PV
+        if pv_node {
+            let child_ss = self.ss_idx(ply + 1);
+            if child_ss < self.ss_pvs.len() {
+                self.ss_pvs[child_ss].clear();
+            }
+        }
+
         if pv_node && self.sel_depth < ply + 1 {
             self.sel_depth = ply + 1;
         }
@@ -223,6 +231,20 @@ impl Worker {
                 best_value = value;
                 if value > alpha {
                     best_move = m;
+
+                    if pv_node {
+                        let child_ss = self.ss_idx(ply + 1);
+                        self.ss_pvs[ss].clear();
+                        self.ss_pvs[ss].push(m);
+                        if child_ss < self.ss_pvs.len() {
+                            let n = self.ss_pvs[child_ss].len();
+                            for i in 0..n {
+                                let mv = self.ss_pvs[child_ss][i];
+                                self.ss_pvs[ss].push(mv);
+                            }
+                        }
+                    }
+
                     if value < beta {
                         alpha = value;
                     } else {

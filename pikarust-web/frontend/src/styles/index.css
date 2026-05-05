@@ -1,0 +1,110 @@
+@import 'tailwindcss';
+
+:root {
+  --color-bg: #0a0e14;
+  --color-surface: #131a24;
+  --color-border: #1a2332;
+  --color-accent: #00f0ff;
+  --color-accent2: #7b61ff;
+  --color-red-piece: #ff6b35;
+  --color-black-piece: #00d4aa;
+  --color-text: #e0e6ed;
+  --color-text-dim: #6b7b8f;
+}
+
+/* Base */
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 { font-family: 'Orbitron', sans-serif; }
+code, pre, [data-mono] { font-family: 'JetBrains Mono', monospace; }
+
+/* Holographic utilities */
+.glow-cyan { box-shadow: 0 0 8px rgba(0, 240, 255, 0.3), 0 0 2px rgba(0, 240, 255, 0.2); }
+.glow-piece-red { box-shadow: 0 0 10px rgba(255, 107, 53, 0.5), 0 0 3px rgba(255, 107, 53, 0.3); }
+.glow-piece-black { box-shadow: 0 0 10px rgba(0, 212, 170, 0.5), 0 0 3px rgba(0, 212, 170, 0.3); }
+
+.glass-panel {
+  backdrop-filter: blur(12px);
+  background: rgba(19, 26, 36, 0.8);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+}
+
+.scanline {
+  position: relative;
+}
+.scanline::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 240, 255, 0.02) 2px,
+    rgba(0, 240, 255, 0.02) 4px
+  );
+}
+
+/* Board: river gradient */
+.board-river {
+  background: linear-gradient(90deg, rgba(0, 240, 255, 0.05), rgba(123, 97, 255, 0.05), rgba(0, 240, 255, 0.05));
+  background-size: 200% 100%;
+  animation: flow 20s linear infinite;
+}
+
+/* Board: grid lines */
+.board-grid-line {
+  stroke: rgba(0, 240, 255, 0.4);
+  stroke-width: 0.5;
+  filter: drop-shadow(0 0 1px rgba(0, 240, 255, 0.3));
+}
+
+/* Board: selected square */
+.square-selected {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.6), inset 0 0 6px rgba(0, 240, 255, 0.2);
+}
+
+/* Board: valid move dots */
+.valid-move-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 6px rgba(0, 240, 255, 0.6);
+  opacity: 0.7;
+}
+
+/* Board: last move highlight */
+.last-move {
+  background: rgba(123, 97, 255, 0.15);
+}
+
+/* Keyframes */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(0, 240, 255, 0.4); }
+  50% { box-shadow: 0 0 16px rgba(0, 240, 255, 0.7), 0 0 4px rgba(0, 240, 255, 0.3); }
+}
+
+@keyframes flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 240, 255, 0.5); }

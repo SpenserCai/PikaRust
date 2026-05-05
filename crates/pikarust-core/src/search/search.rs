@@ -143,6 +143,8 @@ pub struct Worker {
     pub ss_follow_pvs: Vec<bool>,
     pub ss_cont_hist_indices: Vec<ContHistIndex>,
     pub ss_tt_hits: Vec<bool>,
+    /// Per-ply PV arrays for PV propagation (matches Pikafish ss->pv).
+    pub ss_pvs: Vec<Vec<Move>>,
 }
 
 impl Worker {
@@ -217,6 +219,7 @@ impl Worker {
             ss_follow_pvs: vec![false; ss_size],
             ss_cont_hist_indices: vec![ContHistIndex::SENTINEL; ss_size],
             ss_tt_hits: vec![false; ss_size],
+            ss_pvs: vec![Vec::new(); ss_size],
         };
         w.init_reductions();
         w

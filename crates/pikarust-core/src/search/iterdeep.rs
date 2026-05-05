@@ -273,6 +273,14 @@ impl Worker {
                 && (ply as usize - 1) < self.last_iteration_pv.len()
                 && self.ss_current_moves[ss - 1] == self.last_iteration_pv[ply as usize - 1]);
 
+        // PV node: clear child PV (will be filled by child search)
+        if pv_node {
+            let child_ss = self.ss_idx(ply + 1);
+            if child_ss < self.ss_pvs.len() {
+                self.ss_pvs[child_ss].clear();
+            }
+        }
+
         if depth <= 0 {
             return self.qsearch(ply, alpha, beta, pv_node);
         }
@@ -1038,6 +1046,14 @@ impl Worker {
                 let sel_depth = self.sel_depth;
                 let pv_idx = self.pv_idx;
                 let bmc = self.best_move_changes.load(Ordering::Relaxed);
+                let child_pv: Vec<Move> = {
+                    let child_ss = self.ss_idx(ply + 1);
+                    if child_ss < self.ss_pvs.len() {
+                        self.ss_pvs[child_ss].clone()
+                    } else {
+                        Vec::new()
+                    }
+                };
                 if let Some(rm) = self.root_moves.iter_mut().find(|rm| rm.pv[0] == m) {
                     rm.effort += current_nodes - node_count;
                     rm.average_score = if rm.average_score == -VALUE_INFINITE {
@@ -1071,6 +1087,7 @@ impl Worker {
                         }
 
                         rm.pv.truncate(1);
+                        rm.pv.extend_from_slice(&child_pv);
 
                         if move_count > 1 && pv_idx == 0 {
                             self.best_move_changes.store(bmc + 1, Ordering::Relaxed);
@@ -1093,6 +1110,21 @@ impl Worker {
                 best_value = value;
                 if value + inc > alpha {
                     best_move = m;
+
+                    // Update PV for non-root PV nodes
+                    if pv_node && !ROOT {
+                        let child_ss = self.ss_idx(ply + 1);
+                        self.ss_pvs[ss].clear();
+                        self.ss_pvs[ss].push(m);
+                        if child_ss < self.ss_pvs.len() {
+                            let n = self.ss_pvs[child_ss].len();
+                            for i in 0..n {
+                                let mv = self.ss_pvs[child_ss][i];
+                                self.ss_pvs[ss].push(mv);
+                            }
+                        }
+                    }
+
                     if value >= beta {
                         // Phase C: cutoffCnt condition fix
                         self.ss_cutoff_cnts[ss] += i32::from(extension < 2 || pv_node);

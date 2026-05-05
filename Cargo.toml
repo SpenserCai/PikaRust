@@ -5,6 +5,7 @@ members = [
     "crates/uci-rs",
     "crates/pikarust-app",
     "crates/pikarust-bench",
+    "pikarust-web/bridge",
 ]
 
 [workspace.package]

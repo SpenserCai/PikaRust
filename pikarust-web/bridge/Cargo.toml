@@ -1,0 +1,17 @@
+[package]
+name = "pikarust-bridge"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+futures-util = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+
+[lints]
+workspace = true
