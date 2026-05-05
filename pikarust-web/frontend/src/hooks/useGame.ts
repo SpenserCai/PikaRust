@@ -1,4 +1,4 @@
-import { useReducer, useCallback } from 'react';
+import { useReducer, useCallback, useRef } from 'react';
 
 const START_FEN = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1';
 
@@ -38,20 +38,30 @@ function reducer(state: GameState, action: GameAction): GameState {
 }
 
 // Convert board coordinates to UCI move string: file(a-i) + rank(0-9)
+// Array row 0 = rank 9 (black back rank), row 9 = rank 0 (red back rank)
 function toUci(from: [number, number], to: [number, number]): string {
   const file = (col: number) => String.fromCharCode(97 + col); // a-i
-  return `${file(from[0])}${from[1]}${file(to[0])}${to[1]}`;
+  const rank = (row: number) => 9 - row;
+  return `${file(from[0])}${rank(from[1])}${file(to[0])}${rank(to[1])}`;
 }
 
-export function useGame(sendCommand: (cmd: string) => void) {
+export function useGame(sendCommand: (cmd: string) => void, depth: number = 12, movetime: number = 0) {
   const [state, dispatch] = useReducer(reducer, { fen: START_FEN, moveHistory: [], currentSide: 'w', gameOver: false });
+  const depthRef = useRef(depth);
+  depthRef.current = depth;
+  const movetimeRef = useRef(movetime);
+  movetimeRef.current = movetime;
 
   const makeMove = useCallback((from: [number, number], to: [number, number]) => {
     const move = toUci(from, to);
     dispatch({ type: 'MOVE', move });
     const moves = [...state.moveHistory, move].join(' ');
     sendCommand(`position fen ${state.fen} moves ${moves}`);
-    sendCommand('go');
+    if (movetimeRef.current > 0) {
+      sendCommand(`go movetime ${movetimeRef.current}`);
+    } else {
+      sendCommand(`go depth ${depthRef.current || 12}`);
+    }
   }, [state.fen, state.moveHistory, sendCommand]);
 
   const applyEngineMove = useCallback((move: string) => {

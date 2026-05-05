@@ -17,6 +17,11 @@ export interface EngineMessage {
   bestMove?: string;
 }
 
+export interface BestMoveEvent {
+  move: string;
+  id: number;
+}
+
 type MessageHandler = (msg: EngineMessage) => void;
 
 function parseInfo(line: string): EngineInfo {
@@ -61,10 +66,11 @@ function categorize(line: string): EngineMessage {
 export function useEngine() {
   const [connected, setConnected] = useState(false);
   const [lastInfo, setLastInfo] = useState<EngineInfo | null>(null);
-  const [bestMove, setBestMove] = useState<string | null>(null);
+  const [bestMove, setBestMove] = useState<BestMoveEvent | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Set<MessageHandler>>(new Set());
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const bestMoveIdRef = useRef(0);
 
   const connect = useCallback(() => {
     const url = import.meta.env.PROD ? `ws://${window.location.host}/ws` : 'ws://localhost:9000/ws';
@@ -81,7 +87,10 @@ export function useEngine() {
         if (!line.trim()) continue;
         const msg = categorize(line.trim());
         if (msg.type === 'info') setLastInfo(msg.info ?? null);
-        if (msg.type === 'bestmove') setBestMove(msg.bestMove ?? null);
+        if (msg.type === 'bestmove') {
+          bestMoveIdRef.current += 1;
+          setBestMove(msg.bestMove ? { move: msg.bestMove, id: bestMoveIdRef.current } : null);
+        }
         handlersRef.current.forEach((h) => h(msg));
       }
     };

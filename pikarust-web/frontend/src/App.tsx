@@ -13,9 +13,10 @@ import type { Square } from '@/lib/types';
 
 export default function App() {
   const { connected, sendCommand, onMessage, bestMove } = useEngine();
-  const game = useGame(sendCommand);
-  const analysis = useAnalysis(onMessage);
   const [depth, setDepth] = useState(12);
+  const [movetime, setMovetime] = useState(0);
+  const game = useGame(sendCommand, depth, movetime);
+  const analysis = useAnalysis(onMessage);
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [validMoves, setValidMoves] = useState<Square[]>([]);
 
@@ -39,8 +40,8 @@ export default function App() {
   // Apply engine's best move
   useEffect(() => {
     if (bestMove && !game.gameOver && game.currentSide === 'b') {
-      const from = uciToSquare(bestMove.slice(0, 2));
-      const to = uciToSquare(bestMove.slice(2, 4));
+      const from = uciToSquare(bestMove.move.slice(0, 2));
+      const to = uciToSquare(bestMove.move.slice(2, 4));
       if (from && to) {
         setBoardPosition(prev => {
           const next = prev.map(row => [...row]);
@@ -52,7 +53,7 @@ export default function App() {
           }
           return next;
         });
-        game.applyEngineMove(bestMove);
+        game.applyEngineMove(bestMove.move);
       }
     }
   }, [bestMove]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -91,10 +92,8 @@ export default function App() {
     }
   }, [selectedSquare, validMoves, boardPosition, game]);
 
-  const handleSetDepth = (d: number) => {
-    setDepth(d);
-    sendCommand(`setoption name Depth value ${d}`);
-  };
+  const handleSetDepth = (d: number) => setDepth(d);
+  const handleSetMovetime = (ms: number) => setMovetime(ms);
 
   const lastMove = game.moveHistory.length > 0
     ? (() => {
@@ -120,7 +119,7 @@ export default function App() {
 
   const sidePanel = (
     <>
-      <Controls connected={connected} onNewGame={game.newGame} onUndo={game.undo} onSetDepth={handleSetDepth} />
+      <Controls connected={connected} onNewGame={game.newGame} onUndo={game.undo} onSetDepth={handleSetDepth} onSetMovetime={handleSetMovetime} />
       <AnalysisPanel analysis={analysis} />
       <MoveHistory moves={game.moveHistory} />
     </>
@@ -132,7 +131,7 @@ export default function App() {
 function uciToSquare(s: string): Square | null {
   if (s.length < 2) return null;
   const col = s.charCodeAt(0) - 97; // a=0, i=8
-  const row = parseInt(s[1]!);
-  if (col < 0 || col > 8 || isNaN(row) || row < 0 || row > 9) return null;
-  return { row, col };
+  const rank = parseInt(s[1]!);
+  if (col < 0 || col > 8 || isNaN(rank) || rank < 0 || rank > 9) return null;
+  return { row: 9 - rank, col }; // rank 0 = array row 9, rank 9 = array row 0
 }
