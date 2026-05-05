@@ -892,7 +892,7 @@ impl Worker {
                         - ply_gt_root * 43;
                     let triple_margin = 106 + 299 * i32::from(pv_node)
                         - 263 * i32::from(!tt_capture)
-                        + 93 * i32::from(tt_pv)
+                        + 93 * i32::from(self.ss_tt_pvs[ss])
                         - corr_val_adj
                         - ply_gt_root * 60;
                     extension = 1
@@ -936,10 +936,10 @@ impl Worker {
 
             // All r adjustments (C++ applies these before the LMR/non-LMR branch)
 
-            if tt_pv {
+            if self.ss_tt_pvs[ss] {
                 r -= 2363
                     + i32::from(pv_node) * 963
-                    + i32::from(is_valid(tt_data.value) && tt_data.value > alpha) * 1121
+                    + i32::from(tt_data.value > alpha) * 1121
                     + i32::from(tt_data.depth >= depth) * (1137 + i32::from(cut_node) * 922);
             }
             r += 855;
@@ -1230,7 +1230,7 @@ impl Worker {
             tt_writer.write(
                 pos_key,
                 value_to_tt(best_value, ply),
-                tt_pv,
+                self.ss_tt_pvs[ss],
                 bound,
                 if move_count != 0 {
                     depth
