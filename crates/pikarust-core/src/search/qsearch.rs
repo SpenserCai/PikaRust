@@ -207,6 +207,8 @@ impl Worker {
 
             // Make and search
             self.ss_current_moves[ss] = m;
+            let moved_piece = self.root_pos.moved_piece(m);
+            self.set_cont_hist_index(ply, in_check, capture, moved_piece, m.to_sq());
             self.push_acc_for_move(m, gives_check);
             self.root_pos.debug_check_consistency("after_do_move_qs");
             self.inc_nodes();

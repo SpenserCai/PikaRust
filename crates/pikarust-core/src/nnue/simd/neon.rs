@@ -251,46 +251,15 @@ impl SimdOps for Neon {
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
         debug_assert_eq!(shift, 6);
         let len = input.len();
-        let chunks = len / 8;
-        let remainder = chunks * 8;
 
         // Scalar formula: (v * v) >> (2*shift + 7) = (v * v) >> 19, clamped to [0, 127]
-        // NEON path: narrow i32→i16 (saturating), square i16→i32, shift >>19,
-        // clamp to 127, narrow i32→i16→u8.
+        // We use scalar code to match Pikafish's NEON path exactly (no SIMD for
+        // sqr_clipped_relu on ARM in Pikafish). This avoids i32 overflow issues
+        // that would require i64 multiplication.
 
-        // SAFETY: NEON is always available on aarch64. We process 8 i32 elements
-        // at a time. All accesses are within bounds.
-        unsafe {
-            let in_ptr = input.as_ptr();
-            let out_ptr = output.as_mut_ptr();
-            let max127 = vdupq_n_s16(127);
-
-            for i in 0..chunks {
-                let base = i * 8;
-                let v0 = vld1q_s32(in_ptr.add(base));
-                let v1 = vld1q_s32(in_ptr.add(base + 4));
-
-                let n0 = vqmovn_s32(v0);
-                let n1 = vqmovn_s32(v1);
-                let s16 = vcombine_s16(n0, n1);
-
-                let squared_lo = vmull_s16(vget_low_s16(s16), vget_low_s16(s16));
-                let squared_hi = vmull_s16(vget_high_s16(s16), vget_high_s16(s16));
-
-                let shifted_lo = vshrq_n_s32::<19>(squared_lo);
-                let shifted_hi = vshrq_n_s32::<19>(squared_hi);
-
-                let narrow = vcombine_s16(vqmovn_s32(shifted_lo), vqmovn_s32(shifted_hi));
-                let clamped = vminq_s16(narrow, max127);
-                let packed = vqmovun_s16(clamped);
-                vst1_u8(out_ptr.add(base), packed);
-            }
-        }
-
-        for i in remainder..len {
+        for i in 0..len {
             let v = i64::from(input[i]);
-            let squared = (v * v) >> (2 * shift + 7);
-            output[i] = squared.min(127) as u8;
+            output[i] = ((v * v) >> 19).min(127) as u8;
         }
     }
 
