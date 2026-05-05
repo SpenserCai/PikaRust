@@ -176,6 +176,7 @@ fn handle_position(engine: &mut Engine, fen: Option<&str>, moves: &[String]) {
 
     if let Err(e) = engine.set_position(fen, &move_strs) {
         error!("position error: {e}");
+        println!("info string error: {e}");
     }
 }
 

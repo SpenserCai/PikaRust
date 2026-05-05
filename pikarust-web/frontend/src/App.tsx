@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useState, useMemo } from 'react';
 import { useEngine } from '@/hooks/useEngine';
 import { useGame } from '@/hooks/useGame';
 import { useAnalysis } from '@/hooks/useAnalysis';
@@ -7,9 +7,9 @@ import { Board } from '@/components/board';
 import { AnalysisPanel } from '@/components/analysis/AnalysisPanel';
 import { Controls } from '@/components/controls/Controls';
 import { MoveHistory } from '@/components/history/MoveHistory';
-import { parseFen, INITIAL_FEN } from '@/lib/fen';
+import { parseFen } from '@/lib/fen';
 import { getValidMoves } from '@/lib/moves';
-import type { Square } from '@/lib/types';
+import type { Position, Square } from '@/lib/types';
 
 export default function App() {
   const { connected, sendCommand, onMessage, bestMove } = useEngine();
@@ -20,41 +20,30 @@ export default function App() {
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [validMoves, setValidMoves] = useState<Square[]>([]);
 
-  const position = parseFen(
-    game.moveHistory.length === 0 ? game.fen : game.fen
-  );
+  // Derive board position from FEN + move history (single source of truth)
+  const boardPosition = useMemo(() => {
+    const pos = parseFen(game.fen);
+    for (const move of game.moveHistory) {
+      applyMoveToPosition(pos, move);
+    }
+    return pos;
+  }, [game.fen, game.moveHistory]);
 
-  // Recompute position from FEN + moves is complex; for now use FEN directly.
-  // The real position is tracked by the engine. We maintain a local board state.
-  const [boardPosition, setBoardPosition] = useState(() => parseFen(INITIAL_FEN));
-
-  // Reset board on new game
+  // Reset selection on new game
   useEffect(() => {
     if (game.moveHistory.length === 0) {
-      setBoardPosition(parseFen(game.fen));
       setSelectedSquare(null);
       setValidMoves([]);
     }
-  }, [game.fen, game.moveHistory.length]);
+  }, [game.moveHistory.length]);
 
   // Apply engine's best move
   useEffect(() => {
-    if (bestMove && !game.gameOver && game.currentSide === 'b') {
-      const from = uciToSquare(bestMove.move.slice(0, 2));
-      const to = uciToSquare(bestMove.move.slice(2, 4));
-      if (from && to) {
-        setBoardPosition(prev => {
-          const next = prev.map(row => [...row]);
-          const fromRow = next[from.row];
-          const toRow = next[to.row];
-          if (fromRow && toRow) {
-            toRow[to.col] = fromRow[from.col] ?? null;
-            fromRow[from.col] = null;
-          }
-          return next;
-        });
-        game.applyEngineMove(bestMove.move);
-      }
+    if (bestMove && !game.gameOver) {
+      // Only apply if it's the engine's turn (black)
+      // Since makeMove already flipped to 'b' and sent go,
+      // when bestMove arrives currentSide should still be 'b'
+      game.applyEngineMove(bestMove.move);
     }
   }, [bestMove]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -65,17 +54,6 @@ export default function App() {
 
     // If a piece is selected and clicking a valid move target
     if (selectedSquare && validMoves.some(m => m.row === square.row && m.col === square.col)) {
-      // Make the move
-      setBoardPosition(prev => {
-        const next = prev.map(row => [...row]);
-        const fromRow = next[selectedSquare.row];
-        const toRow = next[square.row];
-        if (fromRow && toRow) {
-          toRow[square.col] = fromRow[selectedSquare.col] ?? null;
-          fromRow[selectedSquare.col] = null;
-        }
-        return next;
-      });
       game.makeMove([selectedSquare.col, selectedSquare.row], [square.col, square.row]);
       setSelectedSquare(null);
       setValidMoves([]);
@@ -104,9 +82,6 @@ export default function App() {
       })()
     : null;
 
-  void depth;
-  void position;
-
   const board = (
     <Board
       position={boardPosition}
@@ -134,4 +109,16 @@ function uciToSquare(s: string): Square | null {
   const rank = parseInt(s[1]!);
   if (col < 0 || col > 8 || isNaN(rank) || rank < 0 || rank > 9) return null;
   return { row: 9 - rank, col }; // rank 0 = array row 9, rank 9 = array row 0
+}
+
+function applyMoveToPosition(pos: Position, uciMove: string): void {
+  const from = uciToSquare(uciMove.slice(0, 2));
+  const to = uciToSquare(uciMove.slice(2, 4));
+  if (!from || !to) return;
+  const fromRow = pos[from.row];
+  const toRow = pos[to.row];
+  if (fromRow && toRow) {
+    toRow[to.col] = fromRow[from.col] ?? null;
+    fromRow[from.col] = null;
+  }
 }

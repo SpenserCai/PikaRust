@@ -120,9 +120,131 @@ function getRawMoves(pos: Position, sq: Square): Square[] {
 export function getValidMoves(position: Position, square: Square): Square[] {
   const piece = getCell(position, square.row, square.col);
   if (!piece) return [];
+  const red = isRed(piece);
   return getRawMoves(position, square).filter(to => {
     const target = getCell(position, to.row, to.col);
     if (target && sameColor(piece, target)) return false;
-    return kingsNotFacing(position, square, to, piece);
+    if (!kingsNotFacing(position, square, to, piece)) return false;
+    // Check that the move doesn't leave own king in check
+    return !leavesKingInCheck(position, square, to, piece, red);
   });
+}
+
+function leavesKingInCheck(pos: Position, from: Square, to: Square, piece: PieceType, red: boolean): boolean {
+  // Temporarily apply the move
+  const captured = getCell(pos, to.row, to.col);
+  pos[from.row]![from.col] = null;
+  pos[to.row]![to.col] = piece;
+
+  // Find own king
+  const kingChar = red ? 'K' : 'k';
+  let kingSq: Square | null = null;
+  for (let r = 0; r < 10; r++) {
+    for (let c = 3; c <= 5; c++) {
+      if (getCell(pos, r, c) === kingChar) { kingSq = { row: r, col: c }; break; }
+    }
+    if (kingSq) break;
+  }
+
+  let inCheck = false;
+  if (kingSq) {
+    inCheck = isAttackedBy(pos, kingSq, !red);
+  }
+
+  // Undo the move
+  pos[from.row]![from.col] = piece;
+  pos[to.row]![to.col] = captured;
+
+  return inCheck;
+}
+
+function isAttackedBy(pos: Position, sq: Square, byRed: boolean): boolean {
+  const { row: r, col: c } = sq;
+
+  // Check by Rook (車)
+  for (const [dr, dc] of ORTHO) {
+    for (let i = 1; ; i++) {
+      const nr = r + dr * i, nc = c + dc * i;
+      if (!inBoard(nr, nc)) break;
+      const p = getCell(pos, nr, nc);
+      if (p !== null) {
+        if (isRed(p) === byRed && p.toUpperCase() === 'R') return true;
+        break;
+      }
+    }
+  }
+
+  // Check by Cannon (炮) - needs exactly one piece in between
+  for (const [dr, dc] of ORTHO) {
+    let jumped = false;
+    for (let i = 1; ; i++) {
+      const nr = r + dr * i, nc = c + dc * i;
+      if (!inBoard(nr, nc)) break;
+      const p = getCell(pos, nr, nc);
+      if (!jumped) {
+        if (p !== null) jumped = true;
+      } else {
+        if (p !== null) {
+          if (isRed(p) === byRed && p.toUpperCase() === 'C') return true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Check by Knight (馬)
+  for (const [, , dr, dc] of KNIGHT_LEGS) {
+    const nr = r + dr, nc = c + dc;
+    if (!inBoard(nr, nc)) continue;
+    const p = getCell(pos, nr, nc);
+    if (p !== null && isRed(p) === byRed && p.toUpperCase() === 'N') {
+      if (Math.abs(r - nr) === 2) {
+        const legRow = nr + (r > nr ? 1 : -1);
+        if (getCell(pos, legRow, nc) === null) return true;
+      } else {
+        const legCol = nc + (c > nc ? 1 : -1);
+        if (getCell(pos, nr, legCol) === null) return true;
+      }
+    }
+  }
+
+  // Check by Pawn (兵/卒)
+  const pawnChar = byRed ? 'P' : 'p';
+  const pawnForward = byRed ? -1 : 1;
+  // A pawn at (r - pawnForward, c) attacks sq by moving forward
+  // A pawn at (r, c-1) or (r, c+1) attacks sq by moving sideways (if crossed river)
+  const pawnPositions: [number, number][] = [
+    [r - pawnForward, c], // directly behind (from pawn's perspective, it moves forward to attack)
+    [r, c - 1], [r, c + 1], // sideways
+  ];
+  for (const [pr, pc] of pawnPositions) {
+    if (!inBoard(pr, pc)) continue;
+    const p = getCell(pos, pr, pc);
+    if (p === pawnChar) {
+      // Check if pawn can actually move to sq
+      if (pr === r - pawnForward && pc === c) return true; // forward attack
+      // Sideways only if crossed river
+      if (pr === r) {
+        const crossedRiver = byRed ? pr <= 4 : pr >= 5;
+        if (crossedRiver) return true;
+      }
+    }
+  }
+
+  // Check by King (facing kings)
+  const enemyKingChar = byRed ? 'K' : 'k';
+  if (c >= 3 && c <= 5) {
+    const dir = byRed ? -1 : 1;
+    for (let i = 1; ; i++) {
+      const nr = r + dir * i;
+      if (!inBoard(nr, c)) break;
+      const p = getCell(pos, nr, c);
+      if (p !== null) {
+        if (p === enemyKingChar) return true;
+        break;
+      }
+    }
+  }
+
+  return false;
 }
