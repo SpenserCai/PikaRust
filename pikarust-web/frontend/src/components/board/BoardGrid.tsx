@@ -22,7 +22,11 @@ function StarPoint({ x, y }: { x: number; y: number }) {
   );
 }
 
-export function BoardGrid() {
+interface BoardGridProps {
+  flipped?: boolean;
+}
+
+export function BoardGrid({ flipped = false }: BoardGridProps) {
   const starPoints: [number, number][] = [
     [1, 2], [7, 2], [0, 3], [2, 3], [4, 3], [6, 3], [8, 3],
     [1, 7], [7, 7], [0, 6], [2, 6], [4, 6], [6, 6], [8, 6],
@@ -30,14 +34,11 @@ export function BoardGrid() {
 
   return (
     <g>
-      {/* Horizontal lines */}
       {Array.from({ length: 10 }, (_, i) => (
         <line key={`h${i}`} x1={0} y1={i} x2={8} y2={i} stroke={STROKE} strokeWidth={STROKE_W} />
       ))}
-      {/* Vertical lines - left and right borders full */}
       <line x1={0} y1={0} x2={0} y2={9} stroke={STROKE} strokeWidth={STROKE_W} />
       <line x1={8} y1={0} x2={8} y2={9} stroke={STROKE} strokeWidth={STROKE_W} />
-      {/* Inner verticals - broken at river */}
       {Array.from({ length: 7 }, (_, i) => (
         <g key={`vi${i}`}>
           <line x1={i + 1} y1={0} x2={i + 1} y2={4} stroke={STROKE} strokeWidth={STROKE_W} />
@@ -45,18 +46,17 @@ export function BoardGrid() {
         </g>
       ))}
 
-      {/* Palace diagonals */}
       <line x1={3} y1={0} x2={5} y2={2} stroke={STROKE} strokeWidth={STROKE_W} />
       <line x1={5} y1={0} x2={3} y2={2} stroke={STROKE} strokeWidth={STROKE_W} />
       <line x1={3} y1={7} x2={5} y2={9} stroke={STROKE} strokeWidth={STROKE_W} />
       <line x1={5} y1={7} x2={3} y2={9} stroke={STROKE} strokeWidth={STROKE_W} />
 
-      {/* River text */}
-      <text x={4} y={4.6} textAnchor="middle" fontSize={0.5} fill="var(--color-text-dim)" fontFamily="serif" opacity={0.6}>
+      {/* River text - counter-rotate when board is flipped */}
+      <text x={4} y={4.6} textAnchor="middle" fontSize={0.5} fill="var(--color-text-dim)" fontFamily="serif" opacity={0.6}
+        transform={flipped ? 'rotate(180, 4, 4.5)' : undefined}>
         {"楚 河\u3000\u3000\u3000漢 界"}
       </text>
 
-      {/* Star points */}
       {starPoints.map(([x, y]) => <StarPoint key={`${x},${y}`} x={x} y={y} />)}
     </g>
   );

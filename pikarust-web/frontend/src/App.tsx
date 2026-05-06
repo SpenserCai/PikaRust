@@ -94,6 +94,7 @@ export default function App() {
       validMoves={validMoves}
       lastMove={lastMove}
       inCheck={inCheck}
+      flipped={game.playerSide === 'b'}
     />
   );
 

@@ -11,9 +11,10 @@ interface PieceProps {
   y: number;
   selected?: boolean;
   isLastMove?: boolean;
+  flipped?: boolean;
 }
 
-export function Piece({ type, x, y, selected, isLastMove }: PieceProps) {
+export function Piece({ type, x, y, selected, isLastMove, flipped = false }: PieceProps) {
   const red = type >= 'A' && type <= 'Z';
   const color = red ? 'var(--color-red-piece)' : 'var(--color-black-piece)';
 
@@ -26,7 +27,8 @@ export function Piece({ type, x, y, selected, isLastMove }: PieceProps) {
       <circle r={0.42} fill="var(--color-surface)" stroke={color}
         strokeWidth={isLastMove ? 0.08 : 0.06} />
       <text textAnchor="middle" dy="0.16" fontSize={0.48} fill={color}
-        fontWeight="bold" fontFamily="serif" style={{ userSelect: 'none' }}>
+        fontWeight="bold" fontFamily="serif" style={{ userSelect: 'none' }}
+        transform={flipped ? 'rotate(180)' : undefined}>
         {CHARS[type]}
       </text>
     </g>
