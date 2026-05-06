@@ -1,5 +1,5 @@
 const STROKE = 'var(--color-border)';
-const STROKE_W = 1.5;
+const STROKE_W = 0.03;
 
 function StarPoint({ x, y }: { x: number; y: number }) {
   const d = 0.15;

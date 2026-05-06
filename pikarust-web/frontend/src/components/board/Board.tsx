@@ -37,7 +37,7 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
       viewBox={`${-padding} ${-padding} ${w} ${h}`}
       onClick={handleClick}
       className="w-full max-w-[600px] lg:max-w-[640px] rounded-xl overflow-hidden border border-[var(--color-border)]"
-      style={{ aspectRatio: `${w}/${h}` }}
+      style={{ aspectRatio: `${w}/${h}`, background: 'var(--color-surface)' }}
     >
       <defs>
         <filter id="glow">
