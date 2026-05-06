@@ -8,11 +8,11 @@ interface BoardProps {
   selectedSquare?: Square | null;
   validMoves?: Square[];
   lastMove?: Move | null;
-  inCheck?: boolean;
   flipped?: boolean;
+  checkSquare?: Square | null;
 }
 
-export function Board({ position, onSquareClick, selectedSquare, validMoves = [], lastMove, inCheck, flipped = false }: BoardProps) {
+export function Board({ position, onSquareClick, selectedSquare, validMoves = [], lastMove, flipped = false, checkSquare }: BoardProps) {
   const padding = 0.8;
   const w = 8 + padding * 2;
   const h = 9 + padding * 2;
@@ -31,7 +31,7 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
     }
   }
 
-  const kingPos = inCheck ? findKing(position, flipped ? 'k' : 'K') : null;
+  const kingPos = checkSquare ?? null;
 
   return (
     <svg
@@ -97,13 +97,4 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
       </g>
     </svg>
   );
-}
-
-function findKing(pos: Position, king: 'K' | 'k'): Square | null {
-  for (let r = 0; r < 10; r++) {
-    for (let c = 0; c < 9; c++) {
-      if (pos[r]?.[c] === king) return { row: r, col: c };
-    }
-  }
-  return null;
 }

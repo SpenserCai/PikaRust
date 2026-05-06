@@ -6,15 +6,17 @@ interface Props {
   connected: boolean;
   phase: Phase;
   playerSide: Side;
+  boardFlipped: boolean;
   onStartGame: () => void;
   onNewGame: () => void;
   onUndo: () => void;
   onSetPlayerSide: (side: Side) => void;
+  onToggleFlip: () => void;
   onSetDepth: (depth: number) => void;
   onSetMovetime: (ms: number) => void;
 }
 
-export function Controls({ connected, phase, playerSide, onStartGame, onNewGame, onUndo, onSetPlayerSide, onSetDepth, onSetMovetime }: Props) {
+export function Controls({ connected, phase, playerSide, boardFlipped, onStartGame, onNewGame, onUndo, onSetPlayerSide, onToggleFlip, onSetDepth, onSetMovetime }: Props) {
   const [depth, setDepth] = useState(12);
   const [movetime, setMovetime] = useState(3000);
   const [mode, setMode] = useState<'depth' | 'movetime'>('depth');
@@ -70,6 +72,11 @@ export function Controls({ connected, phase, playerSide, onStartGame, onNewGame,
             {phase === 'playing' && <button onClick={onUndo} className={btnSecondary}>悔棋</button>}
           </div>
         )}
+
+        {/* Flip toggle - always available */}
+        <button onClick={onToggleFlip} className={`${btnSecondary} ${boardFlipped ? 'text-[var(--color-accent)]' : ''}`}>
+          🔄 翻转棋盘
+        </button>
 
         {/* Connection status */}
         <span className="flex items-center gap-1.5 text-xs text-[var(--color-text-dim)]">

@@ -93,8 +93,8 @@ export default function App() {
       selectedSquare={selectedSquare}
       validMoves={validMoves}
       lastMove={lastMove}
-      inCheck={inCheck}
-      flipped={game.playerSide === 'b'}
+      flipped={game.boardFlipped}
+      checkSquare={inCheck ? findKing(boardPosition, game.playerSide === 'w' ? 'K' : 'k') : null}
     />
   );
 
@@ -115,10 +115,12 @@ export default function App() {
         connected={connected}
         phase={game.phase}
         playerSide={game.playerSide}
+        boardFlipped={game.boardFlipped}
         onStartGame={game.startGame}
         onNewGame={game.newGame}
         onUndo={game.undo}
         onSetPlayerSide={game.setPlayerSide}
+        onToggleFlip={game.toggleFlip}
         onSetDepth={handleSetDepth}
         onSetMovetime={handleSetMovetime}
       />
@@ -136,6 +138,15 @@ function uciToSquare(s: string): Square | null {
   const rank = parseInt(s[1]!);
   if (col < 0 || col > 8 || isNaN(rank) || rank < 0 || rank > 9) return null;
   return { row: 9 - rank, col };
+}
+
+function findKing(pos: Position, king: 'K' | 'k'): Square | null {
+  for (let r = 0; r < 10; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (pos[r]?.[c] === king) return { row: r, col: c };
+    }
+  }
+  return null;
 }
 
 function applyMoveToPosition(pos: Position, uciMove: string): void {

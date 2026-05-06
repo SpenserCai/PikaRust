@@ -10,6 +10,7 @@ export interface GameState {
   moveHistory: string[];
   currentSide: Side;
   playerSide: Side;
+  boardFlipped: boolean;
   phase: Phase;
   gameOver: boolean;
   thinking: boolean;
@@ -23,13 +24,14 @@ type GameAction =
   | { type: 'GAME_OVER' }
   | { type: 'SET_THINKING'; thinking: boolean }
   | { type: 'SET_PLAYER_SIDE'; side: Side }
-  | { type: 'START_GAME' };
+  | { type: 'START_GAME' }
+  | { type: 'TOGGLE_FLIP' };
 
 function flipSide(s: Side): Side { return s === 'w' ? 'b' : 'w'; }
 
 const initialState: GameState = {
   fen: START_FEN, moveHistory: [], currentSide: 'w',
-  playerSide: 'w', phase: 'idle', gameOver: false, thinking: false,
+  playerSide: 'w', boardFlipped: false, phase: 'idle', gameOver: false, thinking: false,
 };
 
 function reducer(state: GameState, action: GameAction): GameState {
@@ -52,9 +54,11 @@ function reducer(state: GameState, action: GameAction): GameState {
     case 'SET_THINKING':
       return { ...state, thinking: action.thinking };
     case 'SET_PLAYER_SIDE':
-      return state.phase === 'idle' ? { ...state, playerSide: action.side } : state;
+      return state.phase === 'idle' ? { ...state, playerSide: action.side, boardFlipped: action.side === 'b' } : state;
     case 'START_GAME':
       return state.phase === 'idle' ? { ...state, phase: 'playing' } : state;
+    case 'TOGGLE_FLIP':
+      return { ...state, boardFlipped: !state.boardFlipped };
   }
 }
 
@@ -115,8 +119,12 @@ export function useGame(sendCommand: (cmd: string) => void, depth: number = 12, 
     dispatch({ type: 'SET_PLAYER_SIDE', side });
   }, []);
 
+  const toggleFlip = useCallback(() => {
+    dispatch({ type: 'TOGGLE_FLIP' });
+  }, []);
+
   const setPosition = useCallback((fen: string) => { dispatch({ type: 'SET_POSITION', fen }); }, []);
   const setGameOver = useCallback(() => { dispatch({ type: 'GAME_OVER' }); }, []);
 
-  return { ...state, makeMove, applyEngineMove, startGame, newGame, undo, setPlayerSide, setPosition, setGameOver };
+  return { ...state, makeMove, applyEngineMove, startGame, newGame, undo, setPlayerSide, toggleFlip, setPosition, setGameOver };
 }
