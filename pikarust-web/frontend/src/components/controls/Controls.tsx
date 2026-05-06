@@ -17,7 +17,7 @@ interface Props {
 }
 
 export function Controls({ connected, phase, playerSide, boardFlipped, onStartGame, onNewGame, onUndo, onSetPlayerSide, onToggleFlip, onSetDepth, onSetMovetime }: Props) {
-  const [depth, setDepth] = useState(12);
+  const [depth, setDepth] = useState(20);
   const [movetime, setMovetime] = useState(3000);
   const [mode, setMode] = useState<'depth' | 'movetime'>('depth');
 
@@ -51,7 +51,7 @@ export function Controls({ connected, phase, playerSide, boardFlipped, onStartGa
               </select>
               {mode === 'depth' ? (
                 <select value={depth} onChange={(e) => { const d = Number(e.target.value); setDepth(d); onSetDepth(d); onSetMovetime(0); }} className={selectBase}>
-                  {[6, 8, 10, 12, 16, 20, 24].map((d) => <option key={d} value={d}>d={d}</option>)}
+                  {[6, 8, 10, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48].map((d) => <option key={d} value={d}>d={d}</option>)}
                 </select>
               ) : (
                 <select value={movetime} onChange={(e) => { const ms = Number(e.target.value); setMovetime(ms); onSetMovetime(ms); onSetDepth(0); }} className={selectBase}>

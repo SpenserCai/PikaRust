@@ -14,7 +14,7 @@ import type { Position, Square } from '@/lib/types';
 
 export default function App() {
   const { connected, sendCommand, onMessage, bestMove } = useEngine();
-  const [depth, setDepth] = useState(12);
+  const [depth, setDepth] = useState(20);
   const [movetime, setMovetime] = useState(0);
   const game = useGame(sendCommand, depth, movetime);
   const analysis = useAnalysis(onMessage);
