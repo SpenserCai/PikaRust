@@ -1,12 +1,25 @@
 import type { AnalysisState } from '@/hooks/useAnalysis';
+import type { Side } from '@/hooks/useGame';
 import { Panel } from '@/components/ui/Panel';
 
 interface Props {
   analysis: AnalysisState;
+  playerSide: Side;
 }
 
-export function AnalysisPanel({ analysis }: Props) {
-  const { currentDepth, formattedScore, nodes, nps, pv, wdl } = analysis;
+export function AnalysisPanel({ analysis, playerSide }: Props) {
+  const { currentDepth, score, nodes, nps, pv, wdl } = analysis;
+
+  // Engine outputs from AI's perspective. Normalize to red's perspective.
+  const needsFlip = playerSide === 'w'; // AI is black, flip needed
+  const redScore = needsFlip
+    ? { cp: score.cp != null ? -score.cp : undefined, mate: score.mate != null ? -score.mate : undefined }
+    : score;
+  const redWdl: [number, number, number] | null = wdl
+    ? (needsFlip ? [wdl[2], wdl[1], wdl[0]] : wdl)
+    : null;
+
+  const formattedScore = formatScore(redScore);
 
   return (
     <Panel title="Analysis">
@@ -20,7 +33,7 @@ export function AnalysisPanel({ analysis }: Props) {
           {nps > 0 && <span>nps: {formatNumber(nps)}</span>}
         </div>
 
-        {wdl && <WdlBar wdl={wdl} />}
+        {redWdl && <WdlBar wdl={redWdl} />}
 
         {pv && (
           <div className="text-xs text-[var(--color-text-dim)] break-all leading-relaxed pt-1 border-t border-[var(--color-border)]">
@@ -47,12 +60,18 @@ function WdlBar({ wdl }: { wdl: [number, number, number] }) {
         <div className="bg-[var(--color-black-piece)] flex-1 transition-all duration-300" />
       </div>
       <div className="flex justify-between text-[10px] text-[var(--color-text-dim)]">
-        <span>W {wdl[0]}‰</span>
-        <span>D {wdl[1]}‰</span>
-        <span>L {wdl[2]}‰</span>
+        <span>红 {wdl[0]}‰</span>
+        <span>和 {wdl[1]}‰</span>
+        <span>黑 {wdl[2]}‰</span>
       </div>
     </div>
   );
+}
+
+function formatScore(score: { cp?: number; mate?: number }): string {
+  if (score.mate != null) return `M${score.mate}`;
+  if (score.cp != null) return (score.cp >= 0 ? '+' : '') + (score.cp / 100).toFixed(2);
+  return '0.00';
 }
 
 function formatNumber(n: number): string {

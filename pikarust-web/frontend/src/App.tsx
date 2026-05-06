@@ -124,7 +124,7 @@ export default function App() {
         onSetDepth={handleSetDepth}
         onSetMovetime={handleSetMovetime}
       />
-      <AnalysisPanel analysis={analysis} />
+      <AnalysisPanel analysis={analysis} playerSide={game.playerSide} />
       <MoveHistory moves={game.moveHistory} />
     </>
   );
