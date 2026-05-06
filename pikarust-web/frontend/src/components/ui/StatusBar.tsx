@@ -1,15 +1,21 @@
+import type { Phase, Side } from '@/hooks/useGame';
+
 interface Props {
-  currentSide: 'w' | 'b';
+  currentSide: Side;
+  playerSide: Side;
+  phase: Phase;
   thinking: boolean;
   inCheck: boolean;
   gameOver: boolean;
 }
 
-export function StatusBar({ currentSide, thinking, inCheck, gameOver }: Props) {
+export function StatusBar({ currentSide, playerSide, phase, thinking, inCheck, gameOver }: Props) {
   let text: string;
   let accent = false;
 
-  if (gameOver) {
+  if (phase === 'idle') {
+    text = '等待开始';
+  } else if (gameOver) {
     text = '游戏结束';
   } else if (thinking) {
     text = 'AI 思考中...';
@@ -17,7 +23,8 @@ export function StatusBar({ currentSide, thinking, inCheck, gameOver }: Props) {
   } else if (inCheck) {
     text = '将军！';
   } else {
-    text = currentSide === 'w' ? '红方走棋' : '黑方走棋';
+    const isPlayerTurn = currentSide === playerSide;
+    text = isPlayerTurn ? '轮到你走棋' : (currentSide === 'w' ? '红方走棋' : '黑方走棋');
   }
 
   return (

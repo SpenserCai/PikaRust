@@ -21,7 +21,6 @@ export default function App() {
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [validMoves, setValidMoves] = useState<Square[]>([]);
 
-  // Derive board position from FEN + move history (single source of truth)
   const boardPosition = useMemo(() => {
     const pos = parseFen(game.fen);
     for (const move of game.moveHistory) {
@@ -30,13 +29,11 @@ export default function App() {
     return pos;
   }, [game.fen, game.moveHistory]);
 
-  // Detect check (is red king under attack?)
   const inCheck = useMemo(() => {
-    if (game.currentSide !== 'w') return false;
-    return isKingInCheck(boardPosition, 'w');
-  }, [boardPosition, game.currentSide]);
+    if (game.currentSide !== game.playerSide) return false;
+    return isKingInCheck(boardPosition, game.playerSide);
+  }, [boardPosition, game.currentSide, game.playerSide]);
 
-  // Reset selection on new game
   useEffect(() => {
     if (game.moveHistory.length === 0) {
       setSelectedSquare(null);
@@ -44,19 +41,23 @@ export default function App() {
     }
   }, [game.moveHistory.length]);
 
-  // Apply engine's best move
   useEffect(() => {
-    if (bestMove && !game.gameOver) {
+    if (bestMove && !game.gameOver && game.phase === 'playing') {
       game.applyEngineMove(bestMove.move);
     }
   }, [bestMove]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isPlayerPiece = useCallback((piece: string) => {
+    return game.playerSide === 'w'
+      ? (piece >= 'A' && piece <= 'Z')
+      : (piece >= 'a' && piece <= 'z');
+  }, [game.playerSide]);
+
   const handleSquareClick = useCallback((square: Square) => {
-    if (game.currentSide !== 'w' || game.gameOver) return;
+    if (game.phase !== 'playing' || game.currentSide !== game.playerSide || game.gameOver) return;
 
     const piece = boardPosition[square.row]?.[square.col] ?? null;
 
-    // If a piece is selected and clicking a valid move target
     if (selectedSquare && validMoves.some(m => m.row === square.row && m.col === square.col)) {
       game.makeMove([selectedSquare.col, selectedSquare.row], [square.col, square.row]);
       setSelectedSquare(null);
@@ -64,15 +65,14 @@ export default function App() {
       return;
     }
 
-    // Select a red piece
-    if (piece && piece >= 'A' && piece <= 'Z') {
+    if (piece && isPlayerPiece(piece)) {
       setSelectedSquare(square);
       setValidMoves(getValidMoves(boardPosition, square));
     } else {
       setSelectedSquare(null);
       setValidMoves([]);
     }
-  }, [selectedSquare, validMoves, boardPosition, game]);
+  }, [selectedSquare, validMoves, boardPosition, game, isPlayerPiece]);
 
   const handleSetDepth = (d: number) => setDepth(d);
   const handleSetMovetime = (ms: number) => setMovetime(ms);
@@ -100,6 +100,8 @@ export default function App() {
   const statusBar = (
     <StatusBar
       currentSide={game.currentSide}
+      playerSide={game.playerSide}
+      phase={game.phase}
       thinking={game.thinking}
       inCheck={inCheck}
       gameOver={game.gameOver}
@@ -108,7 +110,17 @@ export default function App() {
 
   const sidePanel = (
     <>
-      <Controls connected={connected} onNewGame={game.newGame} onUndo={game.undo} onSetDepth={handleSetDepth} onSetMovetime={handleSetMovetime} />
+      <Controls
+        connected={connected}
+        phase={game.phase}
+        playerSide={game.playerSide}
+        onStartGame={game.startGame}
+        onNewGame={game.newGame}
+        onUndo={game.undo}
+        onSetPlayerSide={game.setPlayerSide}
+        onSetDepth={handleSetDepth}
+        onSetMovetime={handleSetMovetime}
+      />
       <AnalysisPanel analysis={analysis} />
       <MoveHistory moves={game.moveHistory} />
     </>
@@ -137,7 +149,6 @@ function applyMoveToPosition(pos: Position, uciMove: string): void {
   }
 }
 
-// Simple check detection: is the given side's king under attack?
 function isKingInCheck(pos: Position, side: 'w' | 'b'): boolean {
   const king = side === 'w' ? 'K' : 'k';
   let kr = -1, kc = -1;
@@ -148,7 +159,6 @@ function isKingInCheck(pos: Position, side: 'w' | 'b'): boolean {
   }
   if (kr < 0) return false;
 
-  // Check if any opponent piece can capture the king
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 9; c++) {
       const p = pos[r]?.[c];
@@ -176,7 +186,6 @@ function canAttack(pos: Position, piece: string, fr: number, fc: number, tr: num
   if (type === 'N') {
     const adx = Math.abs(dc), ady = Math.abs(dr);
     if (!((adx === 1 && ady === 2) || (adx === 2 && ady === 1))) return false;
-    // Check leg
     if (ady === 2) { return pos[fr + (dr > 0 ? 1 : -1)]?.[fc] == null; }
     return pos[fr]?.[fc + (dc > 0 ? 1 : -1)] == null;
   }
@@ -189,7 +198,6 @@ function canAttack(pos: Position, piece: string, fr: number, fc: number, tr: num
     return false;
   }
   if (type === 'K') {
-    // King facing king
     if (dc === 0) return pathClear(pos, fr, fc, tr, tc, 0);
     return false;
   }
