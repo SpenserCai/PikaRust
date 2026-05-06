@@ -115,11 +115,13 @@ impl Engine {
 
     fn ensure_thread_pool(&mut self) {
         if self.thread_pool.is_none() {
-            self.thread_pool = Some(ThreadPool::new(
+            let mut tp = ThreadPool::new(
                 self.options.threads,
                 self.options.hash_mb,
                 self.network.clone(),
-            ));
+            );
+            tp.clear();
+            self.thread_pool = Some(tp);
         }
     }
 

@@ -36,7 +36,7 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
     <svg
       viewBox={`${-padding} ${-padding} ${w} ${h}`}
       onClick={handleClick}
-      className="w-full max-w-[600px] lg:max-w-[640px]"
+      className="w-full max-w-[600px] lg:max-w-[640px] rounded-xl overflow-hidden border border-[var(--color-border)]"
       style={{ aspectRatio: `${w}/${h}` }}
     >
       <defs>
@@ -50,9 +50,9 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
         </filter>
       </defs>
 
-      {/* Board background with rounded corners */}
-      <rect x={-padding + 0.1} y={-padding + 0.1} width={w - 0.2} height={h - 0.2}
-        rx={0.3} ry={0.3} fill="var(--color-surface)" stroke="var(--color-border)" strokeWidth={0.04} />
+      {/* Board background */}
+      <rect x={-padding} y={-padding} width={w} height={h}
+        fill="var(--color-surface)" />
 
       <BoardGrid />
 
