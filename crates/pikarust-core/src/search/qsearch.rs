@@ -21,6 +21,7 @@ impl Worker {
         // PV node: clear child PV
         if pv_node {
             let child_ss = self.ss_idx(ply + 1);
+            self.ss_pvs[ss].clear();
             if child_ss < self.ss_pvs.len() {
                 self.ss_pvs[child_ss].clear();
             }

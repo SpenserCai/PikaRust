@@ -1022,6 +1022,10 @@ impl Worker {
 
             // PV search
             if pv_node && (move_count == 1 || value > alpha) {
+                let child_ss = self.ss_idx(ply + 1);
+                if child_ss < self.ss_pvs.len() {
+                    self.ss_pvs[child_ss].clear();
+                }
                 if m == tt_data.tt_move
                     && ((is_valid(tt_data.value)
                         && is_decisive(tt_data.value)

@@ -234,14 +234,14 @@ impl Position {
             stm = !stm;
             all_attackers &= occupied;
 
-            let stm_attackers = all_attackers & self.pieces_by_color(stm);
+            let mut stm_attackers = all_attackers & self.pieces_by_color(stm);
             if stm_attackers.is_empty() {
                 break;
             }
 
             if (self.pinners(!stm) & occupied).is_not_empty() {
-                let filtered = stm_attackers & !self.blockers_for_king(stm);
-                if filtered.is_empty() {
+                stm_attackers &= !self.blockers_for_king(stm);
+                if stm_attackers.is_empty() {
                     break;
                 }
             }
@@ -326,6 +326,10 @@ impl Position {
         use crate::bitboard::{PALACE, safe_destination};
         use crate::types::Direction;
 
+        if !PALACE.contains(sq) {
+            return Bitboard::EMPTY;
+        }
+
         let mut attacks = Bitboard::EMPTY;
         for step in [
             Direction::NORTH.raw(),
@@ -343,6 +347,10 @@ impl Position {
         use crate::bitboard::{PALACE, safe_destination};
         use crate::types::Direction;
 
+        if !PALACE.contains(sq) {
+            return Bitboard::EMPTY;
+        }
+
         let mut attacks = Bitboard::EMPTY;
         for step in [
             Direction::NORTH_EAST.raw(),
@@ -353,5 +361,30 @@ impl Position {
             attacks |= safe_destination(sq, step) & PALACE;
         }
         attacks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::position::Position;
+    use crate::types::{Move, Square};
+
+    #[test]
+    fn advisor_does_not_attack_outside_palace_square() {
+        let pos = Position::from_fen(
+            "r1ba1a3/4kn3/2n1b4/pNp1p1p1p/4c4/6P2/P1P2R2P/1CcC5/4K4/2BA1AB2 b - - 1 1",
+        )
+        .expect("valid fen");
+
+        let attackers = pos.attackers_to(Square::SQ_C1, pos.all_pieces());
+
+        assert!(
+            (attackers & Square::SQ_D0).is_empty(),
+            "advisor on d0 must not attack c1 outside the palace"
+        );
+        assert!(
+            pos.see_ge(Move::make(Square::SQ_C2, Square::SQ_C1), 0),
+            "quiet cannon move c2c1 should not be SEE-pruned by a palace-illegal advisor recapture"
+        );
     }
 }
