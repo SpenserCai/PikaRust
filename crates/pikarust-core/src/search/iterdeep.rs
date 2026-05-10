@@ -890,7 +890,7 @@ impl Worker {
 
                 if value < sb {
                     // Phase D: Improved singular extension margin
-                    let corr_val_adj = self.correction_value(ply).abs() / 265_845;
+                    let corr_val_adj = correction_val.abs() / 265_845;
                     let tt_mh_adj = 1085 * i32::from(self.tt_move_history.get()) / 133_615;
                     let ply_gt_root = i32::from(ply > self.root_depth);
                     let double_margin = -4 + 234 * i32::from(pv_node)
