@@ -255,8 +255,9 @@ impl Worker {
             }
         }
 
-        // Check for mate
-        if move_count == 0 && in_check {
+        // Check for mate/stalemate. Pikafish treats a side with no legal quiet
+        // in non-check qsearch as terminal as well.
+        if move_count == 0 {
             let has_quiet = {
                 let ml = generate(&self.root_pos, GenType::Quiets);
                 let mut found = false;
@@ -268,7 +269,7 @@ impl Worker {
                 }
                 found
             };
-            if !has_quiet {
+            if in_check || !has_quiet {
                 return mated_in(ply);
             }
         }
