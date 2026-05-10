@@ -159,15 +159,18 @@ impl TTEntry {
         curr_generation: u8,
     ) {
         let new_key16 = k as u16;
-        let old_key16 = self.key16();
+        let old_data = self.load_data();
+        let old_key16 = old_data as u16;
 
         let move16 = if m.raw() != 0 || new_key16 != old_key16 {
+            let move_mask = 0xffff_u64 << 32;
+            self.store_data((old_data & !move_mask) | (u64::from(m.raw()) << 32));
             m.raw()
         } else {
-            (self.load_data() >> 32) as u16
+            (old_data >> 32) as u16
         };
 
-        let old_depth8 = self.depth8();
+        let old_depth8 = (old_data >> 16) as u8;
         let pv_u8 = u8::from(pv);
         let new_depth8 = (d - DEPTH_NONE) as u8;
 
@@ -460,6 +463,30 @@ mod tests {
         assert_eq!(r.data.tt_move, m2);
         assert_eq!(r.data.value, 20);
         assert_eq!(r.data.depth, 8);
+    }
+
+    #[test]
+    fn test_tt_updates_move_even_without_replacing_entry() {
+        let tt = TranspositionTable::new(1);
+        let key: Key = 0x1234_5678_9ABC_DEF0;
+        let m1 = Move::make(Square::SQ_A0, Square::SQ_A1);
+        let m2 = Move::make(Square::SQ_B0, Square::SQ_B1);
+
+        let r = tt.probe(key);
+        r.writer
+            .write(key, 10, false, Bound::Upper, 10, m1, 5, tt.generation());
+
+        let r = tt.probe(key);
+        r.writer
+            .write(key, 20, false, Bound::Upper, 1, m2, 15, tt.generation());
+
+        let r = tt.probe(key);
+        assert!(r.found);
+        assert_eq!(r.data.tt_move, m2);
+        assert_eq!(r.data.value, 10);
+        assert_eq!(r.data.eval, 5);
+        assert_eq!(r.data.depth, 10);
+        assert_eq!(r.data.bound, Bound::Upper);
     }
 
     #[test]

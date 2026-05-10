@@ -401,7 +401,7 @@ impl Worker {
                 tt_writer.write(
                     pos_key,
                     VALUE_NONE,
-                    tt_pv,
+                    self.ss_tt_pvs[ss],
                     Bound::None,
                     DEPTH_UNSEARCHED,
                     Move::NONE,
@@ -539,7 +539,7 @@ impl Worker {
             }
 
             // Futility pruning
-            if !tt_pv
+            if !self.ss_tt_pvs[ss]
                 && depth < 15
                 && eval >= beta
                 && (!tt_data.tt_move.is_ok() || tt_capture)
@@ -659,7 +659,7 @@ impl Worker {
                         tt_writer.write(
                             pos_key,
                             value_to_tt(pc_value, ply),
-                            tt_pv,
+                            self.ss_tt_pvs[ss],
                             Bound::Lower,
                             prob_cut_depth + 1,
                             pc_move,
@@ -757,7 +757,7 @@ impl Worker {
             let mut r = self.reduction(improving, depth, move_count, delta);
 
             // Increase reduction for ttPv nodes (before Step 13, affects lmrDepth)
-            if tt_pv {
+            if self.ss_tt_pvs[ss] {
                 r += 931;
             }
 
@@ -874,14 +874,15 @@ impl Worker {
             if !ROOT
                 && m == tt_data.tt_move
                 && !excluded_move.is_ok()
-                && depth >= 5 + i32::from(tt_pv)
+                && depth >= 5 + i32::from(self.ss_tt_pvs[ss])
                 && is_valid(tt_data.value)
                 && !is_decisive(tt_data.value)
                 && (tt_data.bound as u8 & Bound::Lower as u8) != 0
                 && tt_data.depth >= depth - 3
                 && !self.is_shuffling(m, ss, ply)
             {
-                let sb = tt_data.value - (44 + 72 * i32::from(tt_pv && !pv_node)) * depth / 69;
+                let sb = tt_data.value
+                    - (44 + 72 * i32::from(self.ss_tt_pvs[ss] && !pv_node)) * depth / 69;
                 let sd = new_depth / 2;
 
                 self.ss_excluded_moves[ss] = m;
