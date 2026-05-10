@@ -326,7 +326,10 @@ impl Worker {
         if !threat_computed {
             let acc = &mut self.acc_stack.current_threat_mut().acc;
             crate::nnue::feature_transformer::refresh_threat_accumulator(
-                net.model(), &self.root_pos, acc, net.simd(),
+                net.model(),
+                &self.root_pos,
+                acc,
+                net.simd(),
             );
         }
 

@@ -68,7 +68,13 @@ pub struct DirtyThreat(pub u32);
 
 impl DirtyThreat {
     #[inline]
-    pub const fn new(is_add: bool, pc: Piece, threatened_pc: Piece, pc_sq: Square, threatened_sq: Square) -> Self {
+    pub const fn new(
+        is_add: bool,
+        pc: Piece,
+        threatened_pc: Piece,
+        pc_sq: Square,
+        threatened_sq: Square,
+    ) -> Self {
         Self(
             ((is_add as u32) << 31)
                 | ((pc.raw() as u32) << 20)

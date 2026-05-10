@@ -41,10 +41,9 @@ impl Position {
             let mut cnt = 0;
 
             let Some(st_2) = self.state_at(2) else {
-                return self.check_rule60_and_material(ply).map_or(
-                    RuleJudgeResult::None,
-                    RuleJudgeResult::Definitive,
-                );
+                return self
+                    .check_rule60_and_material(ply)
+                    .map_or(RuleJudgeResult::None, RuleJudgeResult::Definitive);
             };
             let checkers_2 = st_2.checkers_bb;
 

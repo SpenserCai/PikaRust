@@ -179,7 +179,8 @@ pub fn update_threat_accumulator_incremental(
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
-                        acc.psqt_accumulation[c][j] += model.ft.threat_psqt_weights[psqt_offset + j];
+                        acc.psqt_accumulation[c][j] +=
+                            model.ft.threat_psqt_weights[psqt_offset + j];
                     }
                 }
             }
@@ -190,7 +191,13 @@ pub fn update_threat_accumulator_incremental(
             let (_, mirror, _) = half_ka_v2_hm::make_feature_bucket(perspective, pos);
             let mut removed = IndexList::new();
             let mut added = IndexList::new();
-            full_threats::append_changed_indices(perspective, mirror, dirty, &mut removed, &mut added);
+            full_threats::append_changed_indices(
+                perspective,
+                mirror,
+                dirty,
+                &mut removed,
+                &mut added,
+            );
 
             for &idx in removed.as_slice() {
                 let offset = idx as usize * TRANSFORMED_DIMS;
@@ -203,7 +210,8 @@ pub fn update_threat_accumulator_incremental(
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
-                        acc.psqt_accumulation[c][j] -= model.ft.threat_psqt_weights[psqt_offset + j];
+                        acc.psqt_accumulation[c][j] -=
+                            model.ft.threat_psqt_weights[psqt_offset + j];
                     }
                 }
             }
@@ -219,7 +227,8 @@ pub fn update_threat_accumulator_incremental(
                 }
                 if psqt_offset + PSQT_BUCKETS <= model.ft.threat_psqt_weights.len() {
                     for j in 0..PSQT_BUCKETS {
-                        acc.psqt_accumulation[c][j] += model.ft.threat_psqt_weights[psqt_offset + j];
+                        acc.psqt_accumulation[c][j] +=
+                            model.ft.threat_psqt_weights[psqt_offset + j];
                     }
                 }
             }
@@ -369,20 +378,38 @@ pub fn evaluate_threat_side(
                 let dirty = dt.clone();
                 let (head, tail) = stack.split_at_mut(next);
                 apply_threat_diff::<true>(
-                    model, perspective, mirror, &head[next - 1].acc, &mut tail[0].acc, &dirty, simd,
+                    model,
+                    perspective,
+                    mirror,
+                    &head[next - 1].acc,
+                    &mut tail[0].acc,
+                    &dirty,
+                    simd,
                 );
             }
         }
     } else {
         // Case B: refresh top, then backward update to last_usable
-        refresh_threat_accumulator_one(model, pos, perspective, &mut stack[stack_size - 1].acc, simd);
+        refresh_threat_accumulator_one(
+            model,
+            pos,
+            perspective,
+            &mut stack[stack_size - 1].acc,
+            simd,
+        );
 
         for next in (last_usable..(stack_size - 1)).rev() {
             if let DiffType::DirtyThreats(ref dt) = stack[next + 1].diff {
                 let dirty = dt.clone();
                 let (head, tail) = stack.split_at_mut(next + 1);
                 apply_threat_diff::<false>(
-                    model, perspective, mirror, &tail[0].acc, &mut head[next].acc, &dirty, simd,
+                    model,
+                    perspective,
+                    mirror,
+                    &tail[0].acc,
+                    &mut head[next].acc,
+                    &dirty,
+                    simd,
                 );
             }
         }
@@ -511,7 +538,14 @@ mod tests {
             pos.do_move(m, gives_check);
 
             let mut inc_acc = Accumulator::new();
-            update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty, &simd);
+            update_psq_accumulator_incremental(
+                &model,
+                &pos,
+                &prev_acc,
+                &mut inc_acc,
+                &dirty,
+                &simd,
+            );
 
             let mut ref_acc = Accumulator::new();
             refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
@@ -601,7 +635,14 @@ mod tests {
                 pos.do_move(m, gives_check);
 
                 let mut inc_acc = Accumulator::new();
-                update_psq_accumulator_incremental(&model, &pos, &prev_acc, &mut inc_acc, &dirty, &simd);
+                update_psq_accumulator_incremental(
+                    &model,
+                    &pos,
+                    &prev_acc,
+                    &mut inc_acc,
+                    &dirty,
+                    &simd,
+                );
 
                 let mut ref_acc = Accumulator::new();
                 refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
@@ -657,7 +698,12 @@ mod tests {
 
             let mut inc_acc = Accumulator::new();
             update_threat_accumulator_incremental(
-                &model, &pos, &prev_acc, &mut inc_acc, &dts, &simd,
+                &model,
+                &pos,
+                &prev_acc,
+                &mut inc_acc,
+                &dts,
+                &simd,
             );
 
             let mut ref_acc = Accumulator::new();
@@ -719,7 +765,12 @@ mod tests {
 
                 let mut inc_acc = Accumulator::new();
                 update_threat_accumulator_incremental(
-                    &model, &pos, &prev_acc, &mut inc_acc, &dts, &simd,
+                    &model,
+                    &pos,
+                    &prev_acc,
+                    &mut inc_acc,
+                    &dts,
+                    &simd,
                 );
 
                 let mut ref_acc = Accumulator::new();

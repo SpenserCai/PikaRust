@@ -4,11 +4,11 @@
 
 use std::collections::BTreeSet;
 
+use pikarust_core::nnue::DirtyThreats;
+use pikarust_core::nnue::features::IndexList;
 use pikarust_core::nnue::features::full_threats;
 use pikarust_core::nnue::features::half_ka_v2_hm;
-use pikarust_core::nnue::features::IndexList;
-use pikarust_core::nnue::DirtyThreats;
-use pikarust_core::position::{generate, GenType, Position};
+use pikarust_core::position::{GenType, Position, generate};
 use pikarust_core::types::Color;
 
 const FENS: &[&str] = &[
@@ -28,10 +28,7 @@ fn active_indices(pos: &Position, perspective: Color) -> BTreeSet<u32> {
     list.as_slice().iter().copied().collect()
 }
 
-fn do_move_with_threats(
-    pos: &mut Position,
-    m: pikarust_core::types::Move,
-) -> DirtyThreats {
+fn do_move_with_threats(pos: &mut Position, m: pikarust_core::types::Move) -> DirtyThreats {
     let gives_check = pos.gives_check(m);
     let mut dts = DirtyThreats::new();
     pos.do_move_with_threats(m, gives_check, &mut dts);
@@ -72,7 +69,11 @@ fn test_dirty_threats_completeness_all_legal_moves() {
                 let mut rem_list = IndexList::new();
                 let mut add_list = IndexList::new();
                 full_threats::append_changed_indices(
-                    perspective, mirror, &dts, &mut rem_list, &mut add_list,
+                    perspective,
+                    mirror,
+                    &dts,
+                    &mut rem_list,
+                    &mut add_list,
                 );
 
                 // Check for duplicate same-direction entries
@@ -158,10 +159,11 @@ fn test_dirty_threats_completeness_all_legal_moves() {
 /// the root accumulator still matches a fresh refresh.
 #[test]
 fn test_search_flow_single_move() {
-    use pikarust_core::nnue::{self, Accumulator};
     use pikarust_core::nnue::simd::Dispatch;
+    use pikarust_core::nnue::{self, Accumulator};
 
-    let model = nnue::NnueModel::load(std::path::Path::new("../../models/pikafish.nnue")).expect("load model");
+    let model = nnue::NnueModel::load(std::path::Path::new("../../models/pikafish.nnue"))
+        .expect("load model");
     let simd = Dispatch::new();
 
     for &fen in FENS {
@@ -186,12 +188,22 @@ fn test_search_flow_single_move() {
             // Incremental update from root_acc
             let mut inc_acc = Accumulator::new();
             nnue::feature_transformer::update_threat_accumulator_incremental(
-                &model, &pos, &root_acc, &mut inc_acc, &dts, &simd,
+                &model,
+                &pos,
+                &root_acc,
+                &mut inc_acc,
+                &dts,
+                &simd,
             );
 
             // Full refresh for comparison
             let mut ref_acc = Accumulator::new();
-            nnue::feature_transformer::refresh_threat_accumulator(&model, &pos, &mut ref_acc, &simd);
+            nnue::feature_transformer::refresh_threat_accumulator(
+                &model,
+                &pos,
+                &mut ref_acc,
+                &simd,
+            );
 
             for c in 0..2 {
                 if inc_acc.accumulation[c] != ref_acc.accumulation[c] {
@@ -208,7 +220,12 @@ fn test_search_flow_single_move() {
 
             // Verify root_acc still matches a fresh refresh of the root position
             let mut fresh_root = Accumulator::new();
-            nnue::feature_transformer::refresh_threat_accumulator(&model, &pos, &mut fresh_root, &simd);
+            nnue::feature_transformer::refresh_threat_accumulator(
+                &model,
+                &pos,
+                &mut fresh_root,
+                &simd,
+            );
             for c in 0..2 {
                 if root_acc.accumulation[c] != fresh_root.accumulation[c] {
                     failures.push(format!(
@@ -243,7 +260,16 @@ fn test_dirty_threats_3move_sequence() {
         let before1_w = active_indices(&pos, Color::White);
         let before1_b = active_indices(&pos, Color::Black);
         let dts1 = do_move_with_threats(&mut pos, m1);
-        check_dirty(&pos, &dts1, &before1_w, &before1_b, m1, fen, 1, &mut failures);
+        check_dirty(
+            &pos,
+            &dts1,
+            &before1_w,
+            &before1_b,
+            m1,
+            fen,
+            1,
+            &mut failures,
+        );
 
         let ml2 = generate(&pos, GenType::Legal);
         let limit2 = ml2.len().min(5);
@@ -252,7 +278,16 @@ fn test_dirty_threats_3move_sequence() {
             let before2_w = active_indices(&pos, Color::White);
             let before2_b = active_indices(&pos, Color::Black);
             let dts2 = do_move_with_threats(&mut pos, m2);
-            check_dirty(&pos, &dts2, &before2_w, &before2_b, m2, fen, 2, &mut failures);
+            check_dirty(
+                &pos,
+                &dts2,
+                &before2_w,
+                &before2_b,
+                m2,
+                fen,
+                2,
+                &mut failures,
+            );
 
             let ml3 = generate(&pos, GenType::Legal);
             let limit3 = ml3.len().min(5);
@@ -261,7 +296,16 @@ fn test_dirty_threats_3move_sequence() {
                 let before3_w = active_indices(&pos, Color::White);
                 let before3_b = active_indices(&pos, Color::Black);
                 let dts3 = do_move_with_threats(&mut pos, m3);
-                check_dirty(&pos, &dts3, &before3_w, &before3_b, m3, fen, 3, &mut failures);
+                check_dirty(
+                    &pos,
+                    &dts3,
+                    &before3_w,
+                    &before3_b,
+                    m3,
+                    fen,
+                    3,
+                    &mut failures,
+                );
                 pos.undo_move(m3);
             }
 
@@ -303,17 +347,30 @@ fn check_dirty(
         let (_, mirror, _) = half_ka_v2_hm::make_feature_bucket(perspective, pos);
         let mut rem_list = IndexList::new();
         let mut add_list = IndexList::new();
-        full_threats::append_changed_indices(perspective, mirror, dts, &mut rem_list, &mut add_list);
+        full_threats::append_changed_indices(
+            perspective,
+            mirror,
+            dts,
+            &mut rem_list,
+            &mut add_list,
+        );
         let dirty_removed: BTreeSet<u32> = rem_list.as_slice().iter().copied().collect();
         let dirty_added: BTreeSet<u32> = add_list.as_slice().iter().copied().collect();
 
         let expected_added: BTreeSet<u32> = after.difference(before).copied().collect();
         let expected_removed: BTreeSet<u32> = before.difference(after).copied().collect();
 
-        let missing_added: BTreeSet<u32> = expected_added.difference(&dirty_added).copied().collect();
+        let missing_added: BTreeSet<u32> =
+            expected_added.difference(&dirty_added).copied().collect();
         let extra_added: BTreeSet<u32> = dirty_added.difference(&expected_added).copied().collect();
-        let missing_removed: BTreeSet<u32> = expected_removed.difference(&dirty_removed).copied().collect();
-        let extra_removed: BTreeSet<u32> = dirty_removed.difference(&expected_removed).copied().collect();
+        let missing_removed: BTreeSet<u32> = expected_removed
+            .difference(&dirty_removed)
+            .copied()
+            .collect();
+        let extra_removed: BTreeSet<u32> = dirty_removed
+            .difference(&expected_removed)
+            .copied()
+            .collect();
 
         if !missing_added.is_empty()
             || !extra_added.is_empty()
@@ -336,10 +393,14 @@ fn check_dirty(
                     "FEN: {fen} ply={ply}\n  move: {m} perspective={c}\n  \
                      missing_added({})={:?}\n  extra_added({})={:?}\n  \
                      missing_removed({})={:?}\n  extra_removed({})={:?}",
-                    missing_added.len(), missing_added,
-                    real_extra_added.len(), real_extra_added,
-                    missing_removed.len(), missing_removed,
-                    real_extra_removed.len(), real_extra_removed,
+                    missing_added.len(),
+                    missing_added,
+                    real_extra_added.len(),
+                    real_extra_added,
+                    missing_removed.len(),
+                    missing_removed,
+                    real_extra_removed.len(),
+                    real_extra_removed,
                 );
                 eprintln!("MISMATCH ply {ply}: {msg}");
                 failures.push(msg);

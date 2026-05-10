@@ -138,13 +138,19 @@ fn bench() {
     let mut engine = Engine::new().expect("engine init");
 
     // Warm-up: ensure ThreadPool + TT allocated before timing.
-    let warmup = SearchLimits { depth: Some(1), ..SearchLimits::default() };
+    let warmup = SearchLimits {
+        depth: Some(1),
+        ..SearchLimits::default()
+    };
     let _ = engine.go(&warmup).wait();
 
     // Clear TT once (matches Pikafish ucinewgame before bench).
     engine.new_game().expect("new_game");
 
-    let limits = SearchLimits { depth: Some(13), ..SearchLimits::default() };
+    let limits = SearchLimits {
+        depth: Some(13),
+        ..SearchLimits::default()
+    };
     let mut total_nodes: u64 = 0;
 
     let elapsed = Instant::now();
@@ -156,16 +162,20 @@ fn bench() {
         let pos_ms = pos_start.elapsed().as_millis().max(1) as u64;
         let pos_nps = 1000 * result.nodes / pos_ms;
         total_nodes += result.nodes;
-        eprintln!(
-            "\nPosition: {}/{} ({fen})",
-            i + 1,
-            BENCH_FENS.len(),
-        );
+        eprintln!("\nPosition: {}/{} ({fen})", i + 1, BENCH_FENS.len(),);
         eprintln!(
             "info depth {} seldepth {} multipv 1 score cp {} nodes {} nps {} hashfull {} tbhits 0 time {} pv{}",
-            result.depth, result.seldepth, result.score_cp, result.nodes, pos_nps,
-            result.hashfull, pos_ms,
-            result.pv.iter().fold(String::new(), |s, m| format!("{s} {m}")),
+            result.depth,
+            result.seldepth,
+            result.score_cp,
+            result.nodes,
+            pos_nps,
+            result.hashfull,
+            pos_ms,
+            result
+                .pv
+                .iter()
+                .fold(String::new(), |s, m| format!("{s} {m}")),
         );
         let ponder_str = result
             .ponder_move

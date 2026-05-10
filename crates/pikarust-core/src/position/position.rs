@@ -294,9 +294,9 @@ impl Position {
         dts: &mut crate::nnue::DirtyThreats,
     ) {
         use crate::bitboard::{
-            attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight,
-            attacks_bb_knight_to, attacks_bb_rook, leaper_pass_bb, pawn_attacks_bb,
-            pawn_attacks_to_bb, pseudo_attacks, ray_pass_bb,
+            attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight, attacks_bb_knight_to,
+            attacks_bb_rook, leaper_pass_bb, pawn_attacks_bb, pawn_attacks_to_bb, pseudo_attacks,
+            ray_pass_bb,
         };
         use crate::nnue::DirtyThreat;
 
@@ -325,7 +325,8 @@ impl Position {
         }
 
         // Incoming threats
-        let mut incoming = (pawn_attacks_to_bb(Color::White, s) & self.pieces(Color::White, PieceType::Pawn))
+        let mut incoming = (pawn_attacks_to_bb(Color::White, s)
+            & self.pieces(Color::White, PieceType::Pawn))
             | (pawn_attacks_to_bb(Color::Black, s) & self.pieces(Color::Black, PieceType::Pawn))
             | (attacks_bb_knight_to(s, occupied) & self.pieces_by_type(PieceType::Knight))
             | (attacks_bb_bishop(s, occupied) & self.pieces_by_type(PieceType::Bishop))
@@ -384,7 +385,8 @@ impl Position {
             }
 
             // Knights with s as blocking square, Bishops with s as eye
-            let mut leapers = (pseudo.unconstrained_king(s) & self.pieces_by_type(PieceType::Knight))
+            let mut leapers = (pseudo.unconstrained_king(s)
+                & self.pieces_by_type(PieceType::Knight))
                 | (pseudo.unconstrained_advisor(s) & self.pieces_by_type(PieceType::Bishop));
             while leapers.is_not_empty() {
                 let leaper_sq = leapers.pop_lsb();

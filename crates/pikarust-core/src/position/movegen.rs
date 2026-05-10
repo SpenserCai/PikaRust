@@ -208,9 +208,7 @@ fn generate_evasions(pos: &Position, moves: &mut MoveList) {
                     let att = match hurdle_pt {
                         PieceType::Rook => attacks_bb_rook(hurdle_sq, occupied),
                         PieceType::Knight => attacks_bb_knight(hurdle_sq, occupied),
-                        PieceType::Bishop => {
-                            attacks_bb_bishop(hurdle_sq, occupied) & HALF_BB[us]
-                        }
+                        PieceType::Bishop => attacks_bb_bishop(hurdle_sq, occupied) & HALF_BB[us],
                         PieceType::Advisor => pos.pseudo_attacks_advisor(hurdle_sq),
                         _ => Bitboard::EMPTY,
                     };

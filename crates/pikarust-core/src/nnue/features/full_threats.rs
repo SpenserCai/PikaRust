@@ -210,9 +210,7 @@ fn attacks_bb_with_occ(
     sq: Square,
     occupied: Bitboard,
 ) -> Bitboard {
-    use crate::bitboard::{
-        attacks_bb_bishop, attacks_bb_knight, attacks_bb_rook,
-    };
+    use crate::bitboard::{attacks_bb_bishop, attacks_bb_knight, attacks_bb_rook};
     match pt {
         PieceType::Rook => attacks_bb_rook(sq, occupied),
         PieceType::Cannon => attacks_bb_cannon(sq, occupied),

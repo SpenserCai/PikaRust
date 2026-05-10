@@ -44,8 +44,7 @@ impl Position {
             & (self.pieces_by_type(PieceType::Rook)
                 | self.pieces_by_type(PieceType::Cannon)
                 | self.pieces_by_type(PieceType::King)))
-            | (attacks_bb_knight(ksq, Bitboard::EMPTY)
-                & self.pieces_by_type(PieceType::Knight)))
+            | (attacks_bb_knight(ksq, Bitboard::EMPTY) & self.pieces_by_type(PieceType::Knight)))
             & self.pieces_by_color(!c);
 
         let occupancy = self.all_pieces() ^ (snipers & !self.pieces_by_type(PieceType::Cannon));
@@ -88,8 +87,7 @@ impl Position {
             attacks_bb_knight_to(ksq, self.all_pieces());
         self.state.check_squares[PieceType::Cannon.index()] =
             attacks_bb_cannon(ksq, self.all_pieces());
-        self.state.check_squares[PieceType::Rook.index()] =
-            attacks_bb_rook(ksq, self.all_pieces());
+        self.state.check_squares[PieceType::Rook.index()] = attacks_bb_rook(ksq, self.all_pieces());
         self.state.check_squares[PieceType::King.index()] = Bitboard::EMPTY;
         self.state.check_squares[PieceType::Advisor.index()] = Bitboard::EMPTY;
         self.state.check_squares[PieceType::Bishop.index()] = Bitboard::EMPTY;
@@ -264,8 +262,7 @@ impl Position {
                     } else {
                         self.pieces_by_type(PieceType::Rook)
                     };
-                cannons =
-                    attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
+                cannons = attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
                 all_attackers = non_cannons | cannons;
             } else if (stm_attackers & self.pieces_by_type(PieceType::Bishop)).is_not_empty() {
                 swap = BISHOP_VALUE - swap;
@@ -281,8 +278,8 @@ impl Position {
                 }
                 bb = stm_attackers & self.pieces_by_type(PieceType::Advisor);
                 occupied ^= Bitboard::new(bb.raw() & bb.raw().wrapping_neg());
-                non_cannons |= attacks_bb_knight_to(to, occupied)
-                    & self.pieces_by_type(PieceType::Knight);
+                non_cannons |=
+                    attacks_bb_knight_to(to, occupied) & self.pieces_by_type(PieceType::Knight);
                 all_attackers = non_cannons | cannons;
             } else if (stm_attackers & self.pieces_by_type(PieceType::Cannon)).is_not_empty() {
                 swap = CANNON_VALUE - swap;
@@ -291,8 +288,7 @@ impl Position {
                 }
                 bb = stm_attackers & self.pieces_by_type(PieceType::Cannon);
                 occupied ^= Bitboard::new(bb.raw() & bb.raw().wrapping_neg());
-                cannons =
-                    attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
+                cannons = attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
                 all_attackers = non_cannons | cannons;
             } else if (stm_attackers & self.pieces_by_type(PieceType::Knight)).is_not_empty() {
                 swap = KNIGHT_VALUE - swap;
@@ -311,8 +307,7 @@ impl Position {
                     } else {
                         self.pieces_by_type(PieceType::Rook)
                     };
-                cannons =
-                    attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
+                cannons = attacks_bb_cannon(to, occupied) & self.pieces_by_type(PieceType::Cannon);
                 all_attackers = non_cannons | cannons;
             } else {
                 return if (all_attackers & !self.pieces_by_color(stm)).is_not_empty() {

@@ -329,8 +329,8 @@ impl TranspositionTable {
 
         let mut replace_idx = 0usize;
         let curr_gen = self.generation8.load(Ordering::Relaxed);
-        let mut replace_score = i32::from(entries[0].depth8())
-            - 8 * i32::from(entries[0].relative_age(curr_gen));
+        let mut replace_score =
+            i32::from(entries[0].depth8()) - 8 * i32::from(entries[0].relative_age(curr_gen));
 
         for (i, entry) in entries.iter().enumerate().skip(1) {
             let score = i32::from(entry.depth8()) - 8 * i32::from(entry.relative_age(curr_gen));

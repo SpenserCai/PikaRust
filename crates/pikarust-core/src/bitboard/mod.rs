@@ -54,12 +54,12 @@ static LEAPER_PASS_TABLE: LazyLock<[[Bitboard; Square::NUM]; Square::NUM]> = Laz
         for (s2_idx, cell) in row.iter_mut().enumerate() {
             let s2 = Square::from_raw_unchecked(s2_idx as u8);
             if (pseudo.unconstrained_king(s1) & Bitboard::from(s2)).is_not_empty() {
-                *cell |=
-                    pseudo.get(crate::types::PieceType::Knight, s1) & pseudo.unconstrained_advisor(s2);
+                *cell |= pseudo.get(crate::types::PieceType::Knight, s1)
+                    & pseudo.unconstrained_advisor(s2);
             }
             if (pseudo.unconstrained_advisor(s1) & Bitboard::from(s2)).is_not_empty() {
-                *cell |=
-                    pseudo.get(crate::types::PieceType::Bishop, s1) & pseudo.unconstrained_advisor(s2);
+                *cell |= pseudo.get(crate::types::PieceType::Bishop, s1)
+                    & pseudo.unconstrained_advisor(s2);
             }
         }
     }

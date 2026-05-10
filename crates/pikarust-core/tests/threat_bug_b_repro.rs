@@ -49,10 +49,7 @@ fn mirrors(pos: &Position) -> [bool; 2] {
     ]
 }
 
-fn do_move_collect_threats(
-    pos: &mut Position,
-    m: pikarust_core::types::Move,
-) -> DirtyThreats {
+fn do_move_collect_threats(pos: &mut Position, m: pikarust_core::types::Move) -> DirtyThreats {
     let mirror_before = mirrors(pos);
     let gives_check = pos.gives_check(m);
     let mut dts = DirtyThreats::new();
@@ -145,7 +142,8 @@ fn test_all_moves_from_root_incremental_vs_refresh() {
     }
 
     assert_eq!(
-        mismatch_count, 0,
+        mismatch_count,
+        0,
         "{mismatch_count} threat mismatches across {} legal moves",
         ml.len()
     );
@@ -242,7 +240,12 @@ fn test_do_undo_different_move_then_mismatch_move() {
         let dts = do_move_collect_threats(&mut pos, mismatch_move);
         let mut inc_after = Accumulator::new();
         update_threat_accumulator_incremental(
-            model, &pos, &root_acc_after, &mut inc_after, &dts, simd,
+            model,
+            &pos,
+            &root_acc_after,
+            &mut inc_after,
+            &dts,
+            simd,
         );
         let mut ref_after = Accumulator::new();
         refresh_threat_accumulator(model, &pos, &mut ref_after, simd);
@@ -265,7 +268,10 @@ fn test_do_undo_different_move_then_mismatch_move() {
         pos.undo_move(mismatch_move);
     }
 
-    assert_eq!(corruption_count, 0, "{corruption_count} corruptions detected");
+    assert_eq!(
+        corruption_count, 0,
+        "{corruption_count} corruptions detected"
+    );
 }
 
 /// Test 4: do_move_with_threats + undo preserves root accumulator.
@@ -359,7 +365,8 @@ fn test_evaluate_threat_side_from_root() {
     }
 
     assert_eq!(
-        mismatch_count, 0,
+        mismatch_count,
+        0,
         "{mismatch_count} stack-based mismatches across {} legal moves",
         ml.len()
     );
@@ -396,7 +403,12 @@ fn test_2ply_from_root_all_moves() {
             if let DiffType::DirtyThreats(ref dt) = current.diff {
                 let dt_copy = dt.clone();
                 update_threat_accumulator_incremental(
-                    model, &pos, &prev.acc, &mut current.acc, &dt_copy, simd,
+                    model,
+                    &pos,
+                    &prev.acc,
+                    &mut current.acc,
+                    &dt_copy,
+                    simd,
                 );
             }
         }
@@ -407,10 +419,7 @@ fn test_2ply_from_root_all_moves() {
         for c in 0..2 {
             if stack.current_threat().acc.accumulation[c] != ref1.accumulation[c] {
                 mismatch_count += 1;
-                eprintln!(
-                    "PLY1 MISMATCH perspective={c} m1={m1:?} fen={}",
-                    pos.fen()
-                );
+                eprintln!("PLY1 MISMATCH perspective={c} m1={m1:?} fen={}", pos.fen());
             }
         }
 
@@ -427,7 +436,12 @@ fn test_2ply_from_root_all_moves() {
                 if let DiffType::DirtyThreats(ref dt) = current.diff {
                     let dt_copy = dt.clone();
                     update_threat_accumulator_incremental(
-                        model, &pos, &prev.acc, &mut current.acc, &dt_copy, simd,
+                        model,
+                        &pos,
+                        &prev.acc,
+                        &mut current.acc,
+                        &dt_copy,
+                        simd,
                     );
                 }
             }

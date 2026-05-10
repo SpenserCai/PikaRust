@@ -294,18 +294,20 @@ impl Worker {
     ) -> ([&super::history::PieceToHistory; 6], usize) {
         let ss = self.ss_idx(ply);
         // Use a sentinel reference for unused slots (never read past `len`).
-        let sentinel = self.continuation_history.get(false, false, crate::types::Piece::NONE, crate::types::Square::SQ_A0);
+        let sentinel = self.continuation_history.get(
+            false,
+            false,
+            crate::types::Piece::NONE,
+            crate::types::Square::SQ_A0,
+        );
         let mut buf = [sentinel; 6];
         let mut len = 0;
         for offset in 1..=6 {
             if ss >= offset {
                 let idx = self.ss_cont_hist_indices[ss - offset];
-                buf[len] = self.continuation_history.get(
-                    idx.in_check,
-                    idx.capture,
-                    idx.pc,
-                    idx.sq,
-                );
+                buf[len] = self
+                    .continuation_history
+                    .get(idx.in_check, idx.capture, idx.pc, idx.sq);
                 len += 1;
             }
         }

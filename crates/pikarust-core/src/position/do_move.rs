@@ -508,10 +508,7 @@ mod tests {
                 let mut dts = DirtyThreats::new();
                 pos2.do_move_with_threats(m, gc2, &mut dts);
 
-                assert_eq!(
-                    pos1.fen(), pos2.fen(),
-                    "FEN mismatch for {m:?} in {fen}"
-                );
+                assert_eq!(pos1.fen(), pos2.fen(), "FEN mismatch for {m:?} in {fen}");
             }
         }
     }

@@ -297,7 +297,9 @@ fn extract_search_result(workers: &[Worker]) -> SearchResult {
         depth,
         seldepth: workers[best_idx].sel_depth,
         nodes,
-        hashfull: workers[best_idx].tt.hashfull(workers[best_idx].tt.generation()),
+        hashfull: workers[best_idx]
+            .tt
+            .hashfull(workers[best_idx].tt.generation()),
         pv: if workers[best_idx].root_moves.is_empty() {
             Vec::new()
         } else {

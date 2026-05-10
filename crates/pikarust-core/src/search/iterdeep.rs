@@ -421,8 +421,8 @@ impl Worker {
         };
 
         // evalDiff history update is done after TT cutoff (see below in !in_check block)
-        let opponent_worsening = ss >= 1
-            && self.ss_static_evals[ss] > -self.ss_static_evals[ss - 1];
+        let opponent_worsening =
+            ss >= 1 && self.ss_static_evals[ss] > -self.ss_static_evals[ss - 1];
 
         // Depth adjustments based on priorReduction/opponentWorsening
         // These apply regardless of in_check (before C++ goto moves_loop)
