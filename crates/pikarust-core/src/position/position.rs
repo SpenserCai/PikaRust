@@ -411,6 +411,7 @@ impl Position {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub fn debug_check_consistency(&self, context: &str) {
         for sq_idx in 0..Square::NUM {
             let sq = Square::from_raw_unchecked(sq_idx as u8);
@@ -440,6 +441,10 @@ impl Position {
             }
         }
     }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    pub fn debug_check_consistency(&self, _context: &str) {}
 }
 
 impl Clone for Position {

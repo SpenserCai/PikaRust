@@ -166,6 +166,7 @@ impl Position {
 
         self.bloom_filter.remove(self.state.key);
 
+        #[cfg(debug_assertions)]
         self.debug_check_consistency(&format!(
             "inside_undo_move move={m:?} from={from:?} to={to:?} captured={captured:?}"
         ));
