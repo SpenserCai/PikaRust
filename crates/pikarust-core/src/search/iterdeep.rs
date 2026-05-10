@@ -290,6 +290,10 @@ impl Worker {
         let in_check = self.root_pos.checkers().is_not_empty();
         self.ss_in_check[ss] = in_check;
         let us = self.root_pos.side_to_move();
+        self.ss_move_counts[ss] = 0;
+        if ss + 2 < self.ss_cutoff_cnts.len() {
+            self.ss_cutoff_cnts[ss + 2] = 0;
+        }
 
         if self.is_main_thread() {
             self.check_time();
@@ -716,11 +720,6 @@ impl Worker {
         // Compute correction value once before moves loop (on parent position)
         let correction_val = self.correction_value(ply);
 
-        self.ss_move_counts[ss] = 0;
-        if ss + 2 < self.ss_cutoff_cnts.len() {
-            self.ss_cutoff_cnts[ss + 2] = 0;
-        }
-
         loop {
             let m = mp.next_move(&self.root_pos);
             if m == Move::NONE {
@@ -854,7 +853,7 @@ impl Worker {
                         + 112 * i32::from(self.ss_static_evals[ss] > alpha);
                     if futility_value <= alpha {
                         if best_value <= futility_value
-                            && !is_loss(best_value)
+                            && !is_decisive(best_value)
                             && !is_win(futility_value)
                         {
                             best_value = futility_value;
