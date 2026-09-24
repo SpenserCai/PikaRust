@@ -28,6 +28,13 @@ before changing engine behavior.
 
 - Use the workspace edition, MSRV, version, dependency declarations, and lints.
   Keep `Cargo.lock` committed; use `--locked` for validation and release builds.
+- Use the Node.js LTS line in `.node-version` for frontend and protocol tooling.
+  Keep npm engine requirements and CI consistent with it. Upgrade JavaScript
+  actions themselves when their embedded runtime reaches end of life.
+- Review dependency updates against Rust MSRV, npm peer requirements, and
+  upstream migration notes. Upgrade coupled packages together; never bypass
+  peer checks or weaken tests to accept an update. Document narrowly scoped
+  Dependabot exclusions and revisit them when their compatibility limit changes.
 - Keep changes focused. Separate mechanical moves from algorithm changes when
   practical, and retain a failing regression before fixing a confirmed defect.
 - Prefer typed errors at public boundaries. Do not turn malformed FEN, models,
@@ -134,8 +141,10 @@ results without committing screenshots or session logs as documentation.
   internal dependency versions and applicable frontend package metadata.
 - Keep release builds portable; do not publish binaries built with
   `target-cpu=native` as generic architecture downloads.
-- Release automation creates reviewable drafts from a successful CI revision.
-  Do not publish packages or a public release merely to test the workflow.
+- Release automation runs only on explicit manual dispatch, reads the workspace
+  version, and verifies the selected main-branch commit's successful CI. Draft
+  and publication modes share immutable tags and artifact validation. Do not
+  create a tag, publish packages, or publish a release merely to test the workflow.
 - Preserve all existing license notices. The repository declaration, upstream
   Pikafish/Stockfish licenses, and NNUE weight terms are distinct. Do not assert
   that the repository declaration resolves upstream provenance, or enable

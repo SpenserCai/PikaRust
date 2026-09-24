@@ -104,7 +104,7 @@ command when reporting a regression. CI uploads reports as workflow artifacts.
 Missing prerequisites and protocol errors fail the selected suite; an absent
 reference is not represented as a successful comparison.
 
-For the HTTP/WebSocket adapter, Node.js 22 or newer runs the process-level
+For the HTTP/WebSocket adapter, Node.js 24 LTS runs the process-level
 request, search, cancellation, and session lifecycle checks:
 
 ```sh
@@ -208,7 +208,7 @@ browser session.
 
 Build and start the complete local application as shown in the
 [README](../README.md#local-web-interface), or run the browser acceptance script
-with Node.js 22 or newer and Playwright Chromium:
+with Node.js 24 LTS (the release line in `.node-version`) and Playwright Chromium:
 
 ```sh
 scripts/build-web.sh

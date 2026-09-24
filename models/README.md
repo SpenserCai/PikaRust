@@ -1,8 +1,9 @@
 # NNUE model
 
-`pikafish.nnue` is the fixed network used by PikaRust's numerical tests and pinned
-Pikafish reference. Git LFS stores the actual weights; a normal Git checkout may
-contain only a pointer until LFS downloads the object.
+PikaRust uses the `pikafish.nnue` network from
+[Pikafish Networks](https://github.com/official-pikafish/Networks). The model is
+pinned for reproducible evaluation and reference tests. Git LFS stores the
+weights; download the LFS object before running the engine with NNUE.
 
 | Property | Value |
 | --- | --- |
@@ -21,9 +22,9 @@ git lfs pull --include="models/pikafish.nnue"
 scripts/setup-pikafish.sh --verify-model
 ```
 
-The original `master-net` release URL is a rolling download. It is not a reliable
-way to recover this exact historical network. Do not substitute its current
-contents when this repository's LFS object is unavailable.
+The upstream `master-net` release is a rolling download. Use the repository's LFS
+object to obtain the model matching this digest, rather than substituting the
+current release asset.
 
 ## Loading and distribution
 
@@ -31,10 +32,19 @@ Use `Engine::with_nnue_file(path)` when embedding the library, or
 `pikarust --eval-file PATH` for the native UCI application. Those explicit paths
 surface load failures instead of silently selecting material evaluation.
 
-Weights are not included in release application archives or crate packages.
-Distribute or obtain them separately under their own terms. In particular,
-`LICENSE-NNUE` prohibits commercial use without permission; the repository's
-source-code license does not replace these conditions.
+Release application archives and crate packages exclude the weights. The local
+web bundle built by `scripts/build-web.sh` includes the selected network and a
+copy of `LICENSE-NNUE` so that the application can run from that directory.
+
+## License
+
+The weights retain the original
+[Pikafish Networks terms](https://github.com/official-pikafish/Networks#nnue-license),
+reproduced in [LICENSE-NNUE](LICENSE-NNUE). They require lawful use and permission
+for commercial use, and also apply to weights derived from Pikafish's network.
+Keep these terms with any model distribution. PikaRust's MIT declaration for
+original source contributions does not change the model's license or grant
+commercial permission.
 
 ## Updating the reference
 
@@ -46,5 +56,3 @@ source-code license does not replace these conditions.
    verified build. Review every changed expectation.
 5. Run core, scalar, model-backed, and reference E2E checks. Review search and
    strength changes separately; numerical agreement does not establish parity.
-
-Keep temporary upstream checkouts and diagnostic exports outside tracked source.

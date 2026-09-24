@@ -131,18 +131,26 @@ pub(crate) fn locked_value(key: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn sha256(path: &Path) -> std::io::Result<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
+    sha256_reader(std::fs::File::open(path)?)
+}
+
+fn sha256_reader(mut reader: impl std::io::Read) -> std::io::Result<String> {
+    use std::fmt::Write;
+
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 8192];
     loop {
-        let len = file.read(&mut buffer)?;
+        let len = reader.read(&mut buffer)?;
         if len == 0 {
             break;
         }
         hash.update(&buffer[..len]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    let mut encoded = String::with_capacity(64);
+    for byte in hash.finalize() {
+        write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(encoded)
 }
 
 fn check_model(path: &Path) -> PreflightResult {
@@ -188,5 +196,31 @@ fn check_reference(config: &E2eConfig) -> PreflightResult {
         name: "reference provenance".to_owned(),
         passed: result.is_ok(),
         detail: result.map_or_else(|error| error, |()| path.display().to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sha256_reader;
+    use std::io::Read;
+
+    #[test]
+    fn sha256_matches_known_vectors_including_leading_zero_bytes() {
+        for (input, expected) in [
+            (
+                "",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                "abc",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+        ] {
+            assert_eq!(sha256_reader(input.as_bytes()).unwrap(), expected);
+        }
+        assert_eq!(
+            sha256_reader(std::io::repeat(b'a').take(1_000_000)).unwrap(),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        );
     }
 }

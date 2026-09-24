@@ -2,13 +2,14 @@
 
 [![CI](https://github.com/SpenserCai/PikaRust/actions/workflows/ci.yml/badge.svg)](https://github.com/SpenserCai/PikaRust/actions/workflows/ci.yml)
 
-A library-first Chinese chess (Xiangqi) engine in Rust, developed against a
-pinned [Pikafish](https://github.com/official-pikafish/Pikafish) reference.
+PikaRust is a Rust implementation of
+[Pikafish](https://github.com/official-pikafish/Pikafish), a Chinese chess
+(Xiangqi) engine. It provides a reusable Rust library and native applications
+for UCI, HTTP/WebSocket, and browser play.
 
-PikaRust provides legal move generation, NNUE evaluation, search, a native UCI
-application, and experimental HTTP/WebSocket and web applications. Full search
-identity and playing-strength parity with Pikafish remain development goals.
-See [validation](docs/validation.md) for what each test actually establishes.
+The engine implements Xiangqi rules, NNUE evaluation, and search, with scalar,
+x86-64 AVX2, and AArch64 NEON evaluation backends. Development uses a pinned
+Pikafish revision and model for reproducible algorithm comparisons.
 
 ## Components
 
@@ -54,8 +55,8 @@ its separate usage terms. Release application archives do not contain weights.
 
 ## Embed the Rust library
 
-Until registry publication is enabled, use a Git dependency and pin the revision
-you have validated:
+Use a Git dependency to embed the library. Add a `rev` pin for the commit your
+application has validated; registry publication is not enabled.
 
 ```toml
 [dependencies]
@@ -104,26 +105,15 @@ scripts/run-bench.sh
 scripts/run-bench.sh compare
 ```
 
-Reference source and build output are disposable and ignored by Git. Missing
-models, digest mismatches, unavailable required engines, and unmatched test
-filters fail validation. See [validation](docs/validation.md) for suite coverage,
-reports, slow tests, and strength experiments.
-
-The alignment suite requires exact official best moves, scores, node counts, and
-complete PVs at depths 5, 8, and 13 across the maintained position corpus, plus a
-reviewed candidate snapshot. These gates describe that corpus and configuration;
-they do not establish identity for every position or search budget.
-
+The alignment suite checks perft, raw NNUE evaluation, and exact search results
+against the pinned reference, including positions with played move histories.
 The standard benchmark retains search state across its 49-position sequence;
-the E2E oracle resets for every position and depth. See the
-[benchmark procedure](docs/validation.md#standard-benchmark) for repeatable
-timing, matching CPU backends, comparison reports, and the difference between
-these checks.
+the FEN-based search suite resets for each position and depth. Missing models or
+reference builds fail the checks.
 
-Node counts are useful regression signals, and NPS measures throughput on a
-particular machine. Neither proves search correctness or equivalent playing
-strength. Strength claims require a controlled match experiment with sufficient
-games and uncertainty estimates.
+See [validation](docs/validation.md) for fixtures, reports, browser tests,
+benchmarks, and controlled strength experiments. Agreement on the tested corpus
+does not establish identical play for every position or search budget.
 
 ## SIMD
 
@@ -134,15 +124,14 @@ The core includes scalar, x86-64 AVX2, and AArch64 NEON implementations. The def
 cargo test -p pikarust-core --locked --no-default-features --features simd-none
 ```
 
-Platform support is established by the actual CI targets and executed numerical
-comparisons. Successful testing on one operating system or CPU does not validate
-every platform sharing its instruction set.
+CI exercises supported native targets and compares SIMD results with the scalar
+implementation. See [validation](docs/validation.md) for backend-specific checks.
 
 ## Applications
 
 ### Local web interface
 
-Install Node.js and npm, then build the native engine, bridge, and frontend:
+Use Node.js 24 LTS and npm to build the native engine, bridge, and frontend:
 
 ```sh
 scripts/build-web.sh
@@ -157,7 +146,7 @@ it does not execute the engine as WASM. The bridge targets the bundled PikaRust
 engine, including its position and game-status diagnostic extensions; generic
 UCI support alone does not make another engine a compatible replacement.
 
-For repeatable browser acceptance checks, use Node.js 22 or newer, install
+For repeatable browser acceptance checks, use Node.js 24 LTS, install
 Playwright Chromium, and run `node scripts/check-web.mjs` against the built
 bundle. It starts its own local bridge and engine. The
 [browser validation procedure](docs/validation.md#browser-functional-verification)
@@ -189,24 +178,28 @@ authentication and resource isolation are not provided.
 - [Contributing](CONTRIBUTING.md): setup, change process, and checks.
 - [Architecture](docs/architecture.md): engine and application boundaries.
 - [Validation](docs/validation.md): reference alignment and strength evidence.
-- [Releases](docs/releases.md): version-driven draft releases and distribution.
+- [Releases](docs/releases.md): manual release workflow and distribution.
 - [AGENTS.md](AGENTS.md): persistent instructions for automated contributors.
 
-CI validates Rust quality, platform builds, model-backed tests, and reference
-comparisons. Release automation uses the workspace version and a successful
-main-branch CI revision to prepare a draft; manual tagging is not required.
+CI validates Rust quality, native platforms, the browser application, and
+reference comparisons. Run the **Release** workflow manually to prepare a draft
+or publish a release from a validated main-branch commit. It reads the workspace
+version from `Cargo.toml` and creates the version tag automatically; no manual
+tagging is required. See [releases](docs/releases.md) for inputs and checks.
 
 ## Licenses and acknowledgments
 
-The repository currently declares [MIT](LICENSE). The upstream
-[Pikafish](https://github.com/official-pikafish/Pikafish) and
-[Stockfish](https://github.com/official-stockfish/Stockfish) projects use GPLv3;
-PikaRust is developed from their engine work. The repository's MIT declaration
-does not by itself resolve licensing requirements for derived code. Source
-provenance and distribution terms require maintainer review before publication.
-Registry publishing is disabled.
+Original PikaRust contributions are offered under the [MIT License](LICENSE).
+Pikafish and Stockfish retain their
+[upstream GPLv3 terms](https://github.com/official-pikafish/Pikafish/blob/76239d0b06720bfa4588989fd4ac7573e9dbf887/Copying.txt).
+Distribution of work derived from those projects must also comply with those
+terms; the MIT declaration does not relicense upstream-derived code.
 
-The NNUE weights have separate [NNUE terms](models/LICENSE-NNUE), including a
-restriction on commercial use without permission. They are not covered by the
-repository's MIT declaration. We acknowledge Pikafish and Stockfish for their
-foundational engine work.
+The model retains its original [NNUE terms](models/LICENSE-NNUE), including the
+requirement for permission for commercial use. The code license does not cover
+the weights. See [model documentation](models/README.md) for their source and
+fixed digest.
+
+PikaRust builds on the work of the
+[Pikafish](https://github.com/official-pikafish/Pikafish) and
+[Stockfish](https://github.com/official-stockfish/Stockfish) contributors.

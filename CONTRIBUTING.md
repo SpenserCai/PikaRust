@@ -9,8 +9,9 @@ Automation agents also follow [AGENTS.md](AGENTS.md).
 
 Use the Rust toolchain selected by `rust-toolchain.toml`, Git LFS, and the committed
 lockfiles. C++ and `make` are needed only for building the upstream reference;
-Node.js and npm are needed for the web frontend. Reference setup uses Python 3;
-release tooling requires Python 3.11 or newer.
+Node.js 24 LTS and npm are needed for the web frontend. `.node-version` selects
+the supported Node.js release line for local development and CI. Reference setup
+uses Python 3; release tooling requires Python 3.11 or newer.
 
 ```sh
 git clone https://github.com/SpenserCai/PikaRust.git
@@ -64,7 +65,7 @@ PR evidence; do not compare its node total with the E2E suite, which resets
 search state before each position and depth.
 
 For HTTP/WebSocket changes, build `pikarust-server` with the `server` feature and
-run `node scripts/check-server.mjs` with Node.js 22 or newer. See
+run `node scripts/check-server.mjs` with Node.js 24 LTS. See
 [validation](docs/validation.md) for the full command and report location.
 
 For frontend changes:
@@ -92,6 +93,18 @@ Declare shared Rust dependencies at the workspace root. Keep the lockfile in the
 same PR as dependency changes and preserve compatibility with the declared MSRV.
 If a new dependency requires a newer compiler, update the manifest, toolchain,
 CI, and documentation together.
+
+Review npm peer dependencies together with release notes before changing major
+versions. Keep related toolchains in the same update: React and its types, Vite
+and its plugins, and ESLint with its parser and plugins. Use `npm ci` without
+peer-resolution overrides, then run the frontend and browser checks. Dependabot
+groups these updates; exclusions must identify a specific compatibility limit
+and be reviewed when that limit changes.
+
+JavaScript actions have an embedded Node.js runtime independent of the project's
+Node.js version. Check each action's supported runtime when updating its pinned
+commit, and keep the version comment accurate. Do not suppress runtime retirement
+warnings in place of upgrading the action.
 
 Use focused comments for implementation invariants, rustdoc for public API
 contracts, and `docs/` for maintained architecture and operating instructions.

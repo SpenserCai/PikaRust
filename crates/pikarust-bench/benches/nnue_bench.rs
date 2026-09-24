@@ -11,7 +11,7 @@ fn bench_vec_add_i16(c: &mut Criterion) {
             || vec![0i16; 1024],
             |mut a| {
                 d.vec_add_i16(&mut a, &b_data);
-                criterion::black_box(a)
+                std::hint::black_box(a)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -27,7 +27,7 @@ fn bench_vec_sub_i16(c: &mut Criterion) {
             || vec![100i16; 1024],
             |mut a| {
                 d.vec_sub_i16(&mut a, &b_data);
-                criterion::black_box(a)
+                std::hint::black_box(a)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -42,8 +42,8 @@ fn bench_clipped_relu(c: &mut Criterion) {
         b.iter_batched(
             || vec![0u8; 512],
             |mut output| {
-                d.clipped_relu(criterion::black_box(&input), &mut output, 6);
-                criterion::black_box(output)
+                d.clipped_relu(std::hint::black_box(&input), &mut output, 6);
+                std::hint::black_box(output)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -58,8 +58,8 @@ fn bench_sqr_clipped_relu(c: &mut Criterion) {
         b.iter_batched(
             || vec![0u8; 512],
             |mut output| {
-                d.sqr_clipped_relu(criterion::black_box(&input), &mut output, 6);
-                criterion::black_box(output)
+                d.sqr_clipped_relu(std::hint::black_box(&input), &mut output, 6);
+                std::hint::black_box(output)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -79,14 +79,14 @@ fn bench_affine_propagate(c: &mut Criterion) {
             || vec![0i32; out_dim],
             |mut output| {
                 d.affine_propagate(
-                    criterion::black_box(&input),
+                    std::hint::black_box(&input),
                     &weights,
                     &biases,
                     &mut output,
                     in_dim,
                     out_dim,
                 );
-                criterion::black_box(output)
+                std::hint::black_box(output)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -102,8 +102,8 @@ fn bench_transform_features(c: &mut Criterion) {
         b.iter_batched(
             || vec![0u8; 512],
             |mut output| {
-                d.transform_features(criterion::black_box(&psq_acc), &threat_acc, &mut output);
-                criterion::black_box(output)
+                d.transform_features(std::hint::black_box(&psq_acc), &threat_acc, &mut output);
+                std::hint::black_box(output)
             },
             criterion::BatchSize::SmallInput,
         );
@@ -115,7 +115,7 @@ fn bench_horizontal_sum(c: &mut Criterion) {
     let data: Vec<i32> = (0..256).collect();
 
     c.bench_function("simd_horizontal_sum_256", |b| {
-        b.iter(|| criterion::black_box(d.horizontal_sum_i32(criterion::black_box(&data))));
+        b.iter(|| std::hint::black_box(d.horizontal_sum_i32(std::hint::black_box(&data))));
     });
 }
 
@@ -131,8 +131,8 @@ fn bench_find_nnz(c: &mut Criterion) {
     c.bench_function("simd_find_nnz_512", |b| {
         b.iter(|| {
             let mut nnz = [0usize; pikarust_core::nnue::simd::MAX_NNZ];
-            let count = d.find_nnz(criterion::black_box(&input), &mut nnz);
-            criterion::black_box(count)
+            let count = d.find_nnz(std::hint::black_box(&input), &mut nnz);
+            std::hint::black_box(count)
         });
     });
 }

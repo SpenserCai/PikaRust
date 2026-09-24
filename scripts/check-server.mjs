@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Real HTTP/WebSocket lifecycle checks using only the Node 22 standard library.
+// Real HTTP/WebSocket lifecycle checks using only the Node 24 standard library.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';

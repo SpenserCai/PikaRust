@@ -11,7 +11,7 @@ fn bench_legal_movegen_startpos(c: &mut Criterion) {
     let pos = Position::from_fen(STARTPOS).expect("valid fen");
 
     c.bench_function("movegen_legal_startpos", |b| {
-        b.iter(|| criterion::black_box(generate(criterion::black_box(&pos), GenType::Legal)));
+        b.iter(|| std::hint::black_box(generate(std::hint::black_box(&pos), GenType::Legal)));
     });
 }
 
@@ -20,7 +20,7 @@ fn bench_legal_movegen_midgame(c: &mut Criterion) {
     let pos = Position::from_fen(MIDGAME).expect("valid fen");
 
     c.bench_function("movegen_legal_midgame", |b| {
-        b.iter(|| criterion::black_box(generate(criterion::black_box(&pos), GenType::Legal)));
+        b.iter(|| std::hint::black_box(generate(std::hint::black_box(&pos), GenType::Legal)));
     });
 }
 
@@ -29,7 +29,7 @@ fn bench_capture_gen_startpos(c: &mut Criterion) {
     let pos = Position::from_fen(STARTPOS).expect("valid fen");
 
     c.bench_function("movegen_captures_startpos", |b| {
-        b.iter(|| criterion::black_box(generate(criterion::black_box(&pos), GenType::Captures)));
+        b.iter(|| std::hint::black_box(generate(std::hint::black_box(&pos), GenType::Captures)));
     });
 }
 
@@ -38,7 +38,7 @@ fn bench_quiet_gen_startpos(c: &mut Criterion) {
     let pos = Position::from_fen(STARTPOS).expect("valid fen");
 
     c.bench_function("movegen_quiets_startpos", |b| {
-        b.iter(|| criterion::black_box(generate(criterion::black_box(&pos), GenType::Quiets)));
+        b.iter(|| std::hint::black_box(generate(std::hint::black_box(&pos), GenType::Quiets)));
     });
 }
 
@@ -47,7 +47,7 @@ fn bench_pseudolegal_gen_midgame(c: &mut Criterion) {
     let pos = Position::from_fen(MIDGAME).expect("valid fen");
 
     c.bench_function("movegen_pseudolegal_midgame", |b| {
-        b.iter(|| criterion::black_box(generate(criterion::black_box(&pos), GenType::PseudoLegal)));
+        b.iter(|| std::hint::black_box(generate(std::hint::black_box(&pos), GenType::PseudoLegal)));
     });
 }
 
@@ -56,7 +56,7 @@ fn bench_perft_startpos_depth2(c: &mut Criterion) {
     let pos = Position::from_fen(STARTPOS).expect("valid fen");
 
     c.bench_function("perft_startpos_depth2", |b| {
-        b.iter(|| criterion::black_box(perft(criterion::black_box(&pos), 2)));
+        b.iter(|| std::hint::black_box(perft(std::hint::black_box(&pos), 2)));
     });
 }
 
