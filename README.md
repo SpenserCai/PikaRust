@@ -108,10 +108,10 @@ models, digest mismatches, unavailable required engines, and unmatched test
 filters fail validation. See [validation](docs/validation.md) for suite coverage,
 reports, slow tests, and strength experiments.
 
-The alignment suite requires exact official best moves, scores, and node counts
-at depths 5 and 8 across the maintained position corpus, plus a reviewed candidate
-PV snapshot. These gates describe that corpus and configuration; they do not
-establish identity for every position or search budget.
+The alignment suite requires exact official best moves, scores, node counts, and
+complete PVs at depths 5, 8, and 13 across the maintained position corpus, plus a
+reviewed candidate snapshot. These gates describe that corpus and configuration;
+they do not establish identity for every position or search budget.
 
 Node counts are useful regression signals, and NPS measures throughput on a
 particular machine. Neither proves search correctness or equivalent playing

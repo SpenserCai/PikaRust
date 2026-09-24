@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::nnue::Network;
+use crate::position::rule_judge::RuleJudgeResult;
 use crate::position::{GenType, Position, generate};
 use crate::types::{Move, VALUE_INFINITE, VALUE_NONE, Value, is_decisive};
 
@@ -306,14 +307,14 @@ fn extract_search_result(workers: &[Worker]) -> SearchResult {
         workers[best_idx].root_moves[0].score
     };
     let depth = workers[best_idx].completed_depth;
-    let ponder_move = if best_move != Move::NONE
-        && !workers[best_idx].root_moves.is_empty()
-        && workers[best_idx].root_moves[0].pv.len() > 1
-    {
-        Some(workers[best_idx].root_moves[0].pv[1])
-    } else {
-        None
-    };
+    let mut pv = workers[best_idx]
+        .root_moves
+        .first()
+        .map_or_else(Vec::new, |root| root.pv.clone());
+    if pv.len() == 1 {
+        pv.extend(ponder_from_tt(&workers[best_idx], best_move));
+    }
+    let ponder_move = pv.get(1).copied();
 
     SearchResult {
         best_move,
@@ -325,12 +326,25 @@ fn extract_search_result(workers: &[Worker]) -> SearchResult {
         hashfull: workers[best_idx]
             .tt
             .hashfull(workers[best_idx].tt.generation()),
-        pv: if workers[best_idx].root_moves.is_empty() {
-            Vec::new()
-        } else {
-            workers[best_idx].root_moves[0].pv.clone()
-        },
+        pv,
     }
+}
+
+fn ponder_from_tt(worker: &Worker, best_move: Move) -> Option<Move> {
+    // Match upstream RootMove::extract_ponder_from_tt after search completes.
+    // A private position copy keeps worker history, search counters, and the
+    // root position unchanged on every return path, including rule adjudication.
+    let mut position = worker.root_pos.clone();
+    if !position.is_legal_move(best_move) {
+        return None;
+    }
+    let gives_check = position.gives_check(best_move);
+    position.do_move(best_move, gives_check);
+    if matches!(position.rule_judge(1), RuleJudgeResult::Definitive(_)) {
+        return None;
+    }
+    let probe = worker.tt.probe(position.key());
+    (probe.found && position.is_legal_move(probe.data.tt_move)).then_some(probe.data.tt_move)
 }
 
 fn find_best_thread_idx(workers: &[Worker]) -> usize {
@@ -417,7 +431,7 @@ fn build_root_moves(pos: &Position, limits: &SearchLimits) -> Vec<RootMove> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Piece, PieceType, Square};
+    use crate::types::{Bound, Piece, PieceType, Square};
     use std::time::Duration;
 
     fn history_biases(worker: &Worker) -> [i16; 4] {
@@ -479,5 +493,108 @@ mod tests {
         assert_eq!(actual.depth, expected.depth);
         assert_eq!(actual.nodes, expected.nodes);
         assert_eq!(actual.pv, expected.pv);
+    }
+
+    fn store_ponder(pool: &ThreadPool, best_move: Move, ponder: Move) {
+        let mut child = pool.workers[0].root_pos.clone();
+        assert!(child.is_legal_move(best_move));
+        let gives_check = child.gives_check(best_move);
+        child.do_move(best_move, gives_check);
+        pool.tt.probe(child.key()).writer.write(
+            &pool.tt,
+            child.key(),
+            0,
+            false,
+            Bound::Lower,
+            1,
+            ponder,
+            0,
+            pool.tt.generation(),
+        );
+    }
+
+    #[test]
+    fn ponder_fallback_matches_reference_bench_42_without_mutating_search_state() {
+        // Pinned Pikafish bench 42 at depth 5 finishes with a one-move root PV
+        // and then adds g0e2 from the child position's TT entry for final output.
+        let mut pool = ThreadPool::new(1, 1, None);
+        pool.workers[0].root_pos =
+            Position::from_fen("4k1b2/4a4/5a3/6P1C/9/p4Nn2/2n6/9/4K4/5AB2 b - - 0 1").unwrap();
+        let best_move = Move::make(Square::SQ_G4, Square::SQ_H2);
+        let ponder = Move::make(Square::SQ_G0, Square::SQ_E2);
+        pool.workers[0].root_moves.push(RootMove::new(best_move));
+        pool.workers[0].root_moves[0].score = 9;
+        pool.workers[0].completed_depth = 5;
+        pool.workers[0].nodes.store(612, Ordering::Relaxed);
+
+        let before = extract_search_result(&pool.workers);
+        assert_eq!(before.pv, [best_move]);
+        assert_eq!(before.ponder_move, None);
+        let root_fen = pool.workers[0].root_pos.fen();
+        let root_key = pool.workers[0].root_pos.key();
+        store_ponder(&pool, best_move, ponder);
+
+        let result = extract_search_result(&pool.workers);
+        assert_eq!(result.pv, [best_move, ponder]);
+        assert_eq!(result.ponder_move, Some(ponder));
+        assert_eq!(result.best_move, before.best_move);
+        assert_eq!(result.score, before.score);
+        assert_eq!(result.depth, before.depth);
+        assert_eq!(result.nodes, before.nodes);
+        assert_eq!(pool.workers[0].root_pos.fen(), root_fen);
+        assert_eq!(pool.workers[0].root_pos.key(), root_key);
+        assert_eq!(pool.workers[0].root_moves[0].pv, [best_move]);
+
+        // An existing searched continuation takes precedence over the TT hint.
+        pool.workers[0].root_moves[0].pv.push(ponder);
+        store_ponder(&pool, best_move, Move::make(Square::SQ_G0, Square::SQ_I2));
+        assert_eq!(extract_search_result(&pool.workers).pv, [best_move, ponder]);
+    }
+
+    #[test]
+    fn ponder_fallback_rejects_illegal_tt_moves() {
+        let mut pool = ThreadPool::new(1, 1, None);
+        pool.workers[0].root_pos = Position::start_pos().unwrap();
+        let best_move = Move::make(Square::SQ_B0, Square::SQ_C2);
+        pool.workers[0].root_moves.push(RootMove::new(best_move));
+        for invalid in [
+            Move::NONE,
+            Move::NULL,
+            Move::from_raw(u16::MAX),
+            Move::make(Square::SQ_B9, Square::SQ_B4),
+            Move::make(Square::SQ_H0, Square::SQ_G2),
+        ] {
+            pool.tt.clear();
+            store_ponder(&pool, best_move, invalid);
+            let result = extract_search_result(&pool.workers);
+            assert_eq!(result.pv, [best_move], "raw move {}", invalid.raw());
+            assert_eq!(result.ponder_move, None);
+        }
+    }
+
+    #[test]
+    fn ponder_fallback_does_not_extend_a_definitive_result() {
+        let mut pool = ThreadPool::new(1, 1, None);
+        pool.workers[0].root_pos = Position::from_fen(
+            "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 119 1",
+        )
+        .unwrap();
+        let best_move = Move::make(Square::SQ_B0, Square::SQ_C2);
+        let ponder = Move::make(Square::SQ_B9, Square::SQ_C7);
+        pool.workers[0].root_moves.push(RootMove::new(best_move));
+        store_ponder(&pool, best_move, ponder);
+
+        let mut child = pool.workers[0].root_pos.clone();
+        let gives_check = child.gives_check(best_move);
+        child.do_move(best_move, gives_check);
+        assert!(child.is_legal_move(ponder));
+        assert!(matches!(
+            child.rule_judge(1),
+            RuleJudgeResult::Definitive(_)
+        ));
+        let result = extract_search_result(&pool.workers);
+        assert_eq!(result.pv, [best_move]);
+        assert_eq!(result.ponder_move, None);
+        assert_eq!(pool.workers[0].root_pos.rule60_count(), 119);
     }
 }

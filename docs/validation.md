@@ -47,7 +47,7 @@ validation.
 | Perft reference comparison | Exact leaf totals and root move divisions on the fixture positions | Evaluation or search strength |
 | NNUE reference comparison | Exact raw integer output on the comparison positions | Identity of the entire search tree |
 | Fixed-node search diagnostics | Legal output, repeatability, and reported fixed-budget differences | Full upstream search alignment |
-| Fixed-depth search reference comparison | Exact official best moves, scores, and node counts at depths 5 and 8 | Identity at every depth or position, or official PV equality |
+| Fixed-depth search reference comparison | Exact official best moves, scores, node counts, and complete PVs at depths 5, 8, and 13 | Identity at every depth or position |
 | Candidate search snapshot | Reviewed fixed-depth moves, scores, node counts, and complete legal PVs | Independent correctness of the snapshot itself |
 | UCI process tests | Handshake, limits, cancellation, and output framing | Hosting reliability under arbitrary load |
 | Match tests | Complete legal games and recorded results | Statistically established Elo from a small sample |
@@ -114,11 +114,11 @@ cargo test -p pikarust-core --release --locked -- --list --ignored
 ## Search alignment procedure
 
 The `search_regression` case compares every fixture position against the pinned
-official engine at depths 5 and 8, with one thread and 16 MiB hash. Best move,
-score, and node count must match exactly. It also checks candidate output against
-the reviewed `e2e_platform/fixtures/search-baseline.json` snapshot, including the
-complete PV and its legality. The report records official PV differences, but
-does not require the official and candidate PV tails to match.
+official engine at depths 5, 8, and 13, with one thread and 16 MiB hash. Best move,
+score, node count, and complete PV must match exactly. It also checks candidate
+output against the reviewed `e2e_platform/fixtures/search-baseline.json`
+snapshot, including the complete PV and its legality. Both engines' PVs are
+replayed move by move to verify legality before comparing the recorded output.
 
 The snapshot provides a separate regression gate; its output alone does not
 establish upstream correctness. An intentional search change can generate a

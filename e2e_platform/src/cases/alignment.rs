@@ -12,6 +12,8 @@ use crate::harness::engine_process::EngineProcess;
 use crate::harness::uci_io::{self, InfoLine};
 use crate::referee::game_state::GameState;
 
+const SEARCH_DEPTHS: [u32; 3] = [5, 8, 13];
+
 pub fn positions() -> impl Iterator<Item = (&'static str, &'static str)> {
     include_str!("../../fixtures/positions.tsv")
         .lines()
@@ -299,8 +301,9 @@ pub fn record_search_baseline(config: &E2eConfig) -> E2eResult<serde_json::Value
     uci_io::set_option(&mut engine, "Threads", "1")?;
     uci_io::set_option(&mut engine, "Hash", "16")?;
     let mut observations = Vec::new();
-    let searches = positions()
-        .flat_map(|(name, fen)| [5, 8].map(|depth| (format!("{name}_depth{depth}"), fen, depth)));
+    let searches = positions().flat_map(|(name, fen)| {
+        SEARCH_DEPTHS.map(|depth| (format!("{name}_depth{depth}"), fen, depth))
+    });
     for (name, fen, depth) in searches {
         reset(&mut engine, fen, config)?;
         let (bestmove, infos) = uci_io::go_depth(&mut engine, depth, config.search_timeout)?;
@@ -323,7 +326,7 @@ pub fn record_search_baseline(config: &E2eConfig) -> E2eResult<serde_json::Value
     engine.quit()?;
     Ok(
         serde_json::json!({"schema_version":1,"criterion":"exact candidate fixed-depth regression snapshot; not upstream parity",
-        "reference_lock":include_str!("../../../scripts/reference.lock"), "depths":[5,8],"threads":1,"hash_mb":16,"positions":observations}),
+        "reference_lock":include_str!("../../../scripts/reference.lock"), "depths":SEARCH_DEPTHS,"threads":1,"hash_mb":16,"positions":observations}),
     )
 }
 
@@ -359,7 +362,7 @@ impl TestCase for SearchRegression {
             let observed = &candidate["search"];
             let oracle = &upstream["search"];
             let equal = observed["bestmove"] == oracle["bestmove"]
-                && ["depth", "nodes", "score_cp", "score_mate"]
+                && ["depth", "nodes", "score_cp", "score_mate", "pv"]
                     .iter()
                     .all(|field| observed["final_info"][field] == oracle["final_info"][field]);
             reference_parity &= equal;
@@ -369,7 +372,7 @@ impl TestCase for SearchRegression {
         let snapshot_matches = actual == expected;
         let passed = snapshot_matches && reference_parity;
         Ok(TestOutcome { name:self.name().to_owned(), passed, duration:start.elapsed(), detail:serde_json::json!({
-            "criterion":"official bestmove, exact score and nodes parity at depths 5 and 8 AND candidate full-PV reviewed snapshot",
+            "criterion":"official bestmove, exact score, nodes and full-PV parity at every configured depth AND reviewed snapshot",
             "snapshot_matches":snapshot_matches,"reference_parity":reference_parity,"positions":comparisons,
             "expected":expected,"actual":actual,
         }).to_string() })
