@@ -196,17 +196,17 @@ tagging is required. See [releases](docs/releases.md) for inputs and checks.
 
 ## Licenses and acknowledgments
 
-The engine library and the programs that link it use
-[GPL-3.0-or-later](LICENSE). The independent UCI parser, web bridge, and frontend
-retain [MIT](LICENSE-MIT). See [licensing](docs/licensing.md) for the component
-map and distribution requirements, and [NOTICE.md](NOTICE.md) for Pikafish and
-Stockfish provenance.
+| Component | License |
+| --- | --- |
+| Engine library, native applications, benchmarks, and validation tools | [GNU GPL v3.0 or later](LICENSE) |
+| Independent UCI protocol library, web bridge, and browser frontend | [MIT](LICENSE-MIT) |
+| NNUE weights | [Original NNUE license](models/LICENSE-NNUE) |
 
-The model retains its original [NNUE terms](models/LICENSE-NNUE), including the
-requirement for permission for commercial use. The code license does not cover
-the weights. See [model documentation](models/README.md) for their source and
-fixed digest.
+The NNUE weights remain subject to their original license, which requires
+permission for commercial use. The GPL and MIT licenses for the code do not
+grant additional rights to the weights.
 
 PikaRust builds on the work of the
 [Pikafish](https://github.com/official-pikafish/Pikafish) and
 [Stockfish](https://github.com/official-stockfish/Stockfish) contributors.
+Their copyright notices and acknowledgments are preserved in [NOTICE.md](NOTICE.md).
