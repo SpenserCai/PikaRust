@@ -139,6 +139,12 @@ Keep runtime-specific dependencies and exception conversion out of core.
 Native threads and filesystem-based model loading need an explicit design for
 WASM; the presence of a Rust library does not establish browser compatibility.
 
+The core and programs that link it use `GPL-3.0-or-later`, including future linked
+bindings. The standalone protocol crate, subprocess bridge, and frontend retain
+MIT under the [component licensing policy](licensing.md). Reassess that scope
+when moving code or adding dependencies; a separate crate or process is not by
+itself a license exception for a combined application.
+
 Refactor at an existing boundary when it reduces coupling or makes an invariant
 testable. Avoid mixing a broad module relocation with numerical changes to
 search or NNUE. Preserve a reproducible comparison before replacing an algorithm,

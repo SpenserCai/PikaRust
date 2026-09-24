@@ -2,6 +2,7 @@
 """Validate and package releases; remote changes require an explicit main dispatch."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import gzip
 import hashlib
@@ -25,6 +26,96 @@ import zipfile
 CONTROLLER = Path(__file__).resolve().parent
 ROOT = CONTROLLER.parent
 TARGETS = ("x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc")
+CODE_LICENSE = "GPL-3.0-or-later"
+GPL_SHA256 = "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+MIT_SHA256 = "5484a91fadfa945aa7f88231e0fe3915591e71c2284baca83f5da428be1d6809"
+LICENSE_FILES = ("LICENSE", "LICENSE-MIT", "NOTICE.md", "docs/licensing.md",
+                 "notices/upstream/Pikafish-AUTHORS", "notices/upstream/Pikafish-COPYRIGHT")
+
+
+def clean_commit() -> str:
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        raise ValueError("distribution builds require a clean committed source tree, including untracked files")
+    return checked_sha(git("rev-parse", "HEAD"))
+
+
+def source_info(release_version: str, sha: str) -> dict:
+    repository = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["repository"].rstrip("/")
+    filename = archive_name(release_version, "source")
+    return {"archive": filename, "commit": sha,
+            "url": f"{repository}/releases/download/v{urllib.parse.quote(release_version, safe='')}/{urllib.parse.quote(filename, safe='')}"}
+
+
+def copy_notices(stage: Path) -> None:
+    for name in (*LICENSE_FILES, "scripts/reference.lock", "models/README.md", "models/LICENSE-NNUE",
+                 "README.md", "CONTRIBUTING.md"):
+        target = stage / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, target)
+    shutil.copy2(ROOT / "Cargo.lock", stage / "Cargo.lock")
+    shutil.copytree(ROOT / "notices", stage / "notices", dirs_exist_ok=True)
+
+
+def vendor_dependencies(destination: Path) -> str:
+    result = subprocess.run(["cargo", "vendor", "--locked", "--versioned-dirs", str(destination)],
+                            cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE)
+    config, count = re.subn(r'(?m)^directory = ".+"$', 'directory = "vendor"', result.stdout)
+    if not count or not tomllib.loads(config).get("source"):
+        raise ValueError("cargo vendor did not provide an offline source configuration")
+    return config
+
+
+def dependency_notices(vendor: Path, stage: Path) -> None:
+    locked = tomllib.loads((ROOT / "Cargo.lock").read_text(encoding="utf-8"))["package"]
+    expected = {(item["name"], item["version"]): item for item in locked if "source" in item}
+    entries = []
+    for crate in sorted(vendor.iterdir()):
+        manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))["package"]
+        key = (manifest["name"], manifest["version"])
+        if key not in expected:
+            raise ValueError(f"vendored crate not in Cargo.lock: {crate.name}")
+        paths = {path for path in crate.rglob("*") if path.is_file()
+                 and re.match(r"^(licen[cs]e|copying|notice|copyright|authors)(?:$|[._-])", path.name, re.I)}
+        if manifest.get("license-file"):
+            path = (crate / manifest["license-file"]).resolve()
+            if not path.is_relative_to(crate.resolve()) or not path.is_file():
+                raise ValueError(f"{crate.name}: license-file must exist inside its vendored source")
+            paths.add(path)
+        origin = crate
+        supplement = ROOT / "notices/dependency-supplements" / crate.name
+        if not paths and (supplement / "SOURCE.md").is_file():
+            paths = {path for path in supplement.rglob("*") if path.is_file()}
+            if not any(re.match(r"^(licen[cs]e|copying)(?:$|[._-])", path.name, re.I) for path in paths):
+                raise ValueError(f"{crate.name}: supplement is missing its verified license text")
+            origin = supplement
+        if not paths:
+            raise ValueError(f"{crate.name}: no dependency license or copyright text was packaged")
+        notices = {}
+        for path in sorted(paths):
+            relative = path.relative_to(origin.resolve() if path.is_absolute() else origin).as_posix()
+            target = stage / "notices/dependencies" / crate.name / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            notices[relative] = digest(target)
+        entries.append({"name": key[0], "version": key[1], "source": expected[key]["source"],
+                        "directory": crate.name, "license": manifest.get("license"), "files": notices,
+                        "notice_source": "supplement" if origin == supplement else "vendored crate"})
+    if {(entry["name"], entry["version"]) for entry in entries} != set(expected):
+        raise ValueError("vendored dependency set differs from Cargo.lock")
+    directory = stage / "notices/dependencies"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def write_tar(stage: Path, archive: Path, timestamp: int, sha: str | None = None) -> None:
+    def normalize(info):
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        info.mtime = timestamp
+        return info
+    with archive.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=timestamp) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w", pax_headers={"comment": sha} if sha else {}) as bundle:
+            bundle.add(stage, arcname=stage.name, filter=normalize)
 
 
 def version() -> str:
@@ -220,10 +311,47 @@ def compiler_version() -> str:
     return subprocess.check_output(["rustc", "--version"], cwd=ROOT, text=True).strip()
 
 
+@contextmanager
+def readable_archive(path: Path):
+    if path.suffix == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            yield archive
+    else:
+        # Vendor checks read thousands of entries: decompress once, then seek on disk.
+        with tempfile.TemporaryFile() as raw:
+            with gzip.open(path, "rb") as compressed:
+                shutil.copyfileobj(compressed, raw)
+            raw.seek(0)
+            with tarfile.open(fileobj=raw, mode="r:") as archive:
+                yield archive
+
+
+def validate_committed_source(read, stem: str, sha: str) -> None:
+    entries = subprocess.check_output(["git", "ls-tree", "-rz", sha], cwd=ROOT).split(b"\0")
+    for entry in entries:
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        _, kind, object_id = metadata.split(b" ")
+        name = path.decode("utf-8")
+        if kind != b"blob":
+            raise ValueError(f"unsupported committed source entry: {name}")
+        try:
+            content = read(f"{stem}/{name}")
+        except KeyError as error:
+            raise ValueError(f"committed source file missing: {name}") from error
+        if name == ".cargo/config.toml":
+            original = subprocess.check_output(["git", "show", f"{sha}:{name}"], cwd=ROOT)
+            if not content.startswith(original + b"\n"):
+                raise ValueError("committed source Cargo configuration changed")
+        elif hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content, usedforsecurity=False).hexdigest() != object_id.decode():
+            raise ValueError(f"committed source file changed: {name}")
+
+
 def validate_archive(path: Path, release_version: str, sha: str, target: str) -> None:
     stem = f"pikarust-{release_version}-{target}"
     source_archive = target == "source"
-    with zipfile.ZipFile(path) if path.suffix == ".zip" else tarfile.open(path) as archive:
+    with readable_archive(path) as archive:
         if isinstance(archive, zipfile.ZipFile):
             entries = archive.infolist()
             names = [entry.filename for entry in entries]
@@ -232,13 +360,14 @@ def validate_archive(path: Path, release_version: str, sha: str, target: str) ->
             read = archive.read
         else:
             entries = archive.getmembers()
+            members = {entry.name: entry for entry in entries}
             names = [entry.name for entry in entries]
             if any(not (entry.isdir() or entry.isfile()) for entry in entries):
                 raise ValueError(f"{path.name}: unexpected archive link or special file")
             if source_archive and archive.pax_headers.get("comment") != sha:
                 raise ValueError("source archive does not identify the selected Git commit")
             def read(name):
-                stream = archive.extractfile(name)
+                stream = archive.extractfile(members[name])
                 if stream is None:
                     raise ValueError(f"{name} is not an archived file")
                 return stream.read()
@@ -250,21 +379,66 @@ def validate_archive(path: Path, release_version: str, sha: str, target: str) ->
                 content = read(name)
                 if not source_archive or len(content) > 1024 or not content.startswith(b"version https://git-lfs.github.com/spec/v1\n"):
                     raise ValueError("release archives must not contain NNUE weights")
+        if len(set(names)) != len(names):
+            raise ValueError("release archive contains duplicate entries")
+        names = set(names)
+        def required(name, allow_empty=False):
+            if f"{stem}/{name}" not in names or (not allow_empty and not read(f"{stem}/{name}")):
+                raise ValueError(f"{path.name}: missing or empty {name}")
+            return read(f"{stem}/{name}")
+        for name in LICENSE_FILES:
+            required(name)
+        if hashlib.sha256(required("LICENSE")).hexdigest() != GPL_SHA256:
+            raise ValueError("release LICENSE must contain the complete GPLv3 text")
+        if hashlib.sha256(required("LICENSE-MIT")).hexdigest() != MIT_SHA256:
+            raise ValueError("release LICENSE-MIT must retain the complete original MIT notice")
+        locked = tomllib.loads(required("Cargo.lock").decode())["package"]
+        dependencies = {(item["name"], item["version"]): item for item in locked if "source" in item}
+        notices = json.loads(required("notices/dependencies/manifest.json"))
+        if len(notices) != len(dependencies) or {(item["name"], item["version"]) for item in notices} != set(dependencies):
+            raise ValueError("dependency notices do not cover the locked dependency set")
+        for item in notices:
+            locked_package = dependencies[(item["name"], item["version"])]
+            if item["source"] != locked_package["source"] or not item["files"]:
+                raise ValueError("dependency notice provenance is incomplete")
+            directory = item["directory"]
+            for filename, expected in item["files"].items():
+                content = required(f"notices/dependencies/{directory}/{filename}")
+                if hashlib.sha256(content).hexdigest() != expected:
+                    raise ValueError("dependency license text differs from its recorded digest")
+            if source_archive:
+                checksums = json.loads(required(f"vendor/{directory}/.cargo-checksum.json"))
+                if checksums.get("package") != locked_package.get("checksum"):
+                    raise ValueError("vendored package checksum differs from Cargo.lock")
+                if not checksums.get("files"):
+                    raise ValueError("vendored source file checksums are missing")
+                for filename, expected in checksums["files"].items():
+                    if hashlib.sha256(required(f"vendor/{directory}/{filename}", allow_empty=True)).hexdigest() != expected:
+                        raise ValueError("vendored source does not match its Cargo checksum")
         if source_archive:
+            validate_committed_source(read, stem, sha)
             manifest = tomllib.loads(read(f"{stem}/Cargo.toml").decode())
             if manifest["workspace"]["package"]["version"] != release_version:
                 raise ValueError("source archive has a different workspace version")
+            if manifest["workspace"]["package"].get("license") != CODE_LICENSE:
+                raise ValueError("source archive engine license must be GPL-3.0-or-later")
+            config = tomllib.loads(required(".cargo/config.toml").decode())
+            if config.get("source", {}).get("vendored-sources", {}).get("directory") != "vendor":
+                raise ValueError("source archive is missing its portable offline Cargo configuration")
+            if config.get("source", {}).get("crates-io", {}).get("replace-with") != "vendored-sources":
+                raise ValueError("source archive must resolve crates.io through its bundled dependencies")
         else:
             metadata = json.loads(read(f"{stem}/build.json"))
             if any((metadata.get("version") != release_version, metadata.get("commit") != sha,
                     metadata.get("target") != target, metadata.get("nnue_included") is not False)):
                 raise ValueError(f"{path.name}: build metadata does not match the selected source")
+            if metadata.get("code_license") != CODE_LICENSE or metadata.get("corresponding_source") != source_info(release_version, sha):
+                raise ValueError("build metadata is missing the matching GPL corresponding source")
             suffix = ".exe" if "windows" in target else ""
-            required = (f"pikarust{suffix}", f"pikarust-server{suffix}", "LICENSE",
+            required_files = (f"pikarust{suffix}", f"pikarust-server{suffix}", "SOURCE.txt",
                         "models/LICENSE-NNUE", "models/README.md", "scripts/reference.lock", "MODEL-REQUIRED.txt")
-            for name in required:
-                if not read(f"{stem}/{name}"):
-                    raise ValueError(f"{path.name}: missing or empty {name}")
+            for name in required_files:
+                required(name)
 
 
 def package(target: str, output: Path) -> None:
@@ -272,7 +446,7 @@ def package(target: str, output: Path) -> None:
         raise ValueError(f"unsupported release target: {target}")
     output.mkdir(parents=True, exist_ok=True)
     release_version = version()
-    sha = checked_sha(git("rev-parse", "HEAD"))
+    sha = clean_commit()
     timestamp = int(git("show", "-s", "--format=%ct", "HEAD"))
     stem = f"pikarust-{release_version}-{target}"
     windows = "windows" in target
@@ -282,22 +456,27 @@ def package(target: str, output: Path) -> None:
         stage.mkdir()
         for binary in ("pikarust", "pikarust-server"):
             shutil.copy2(ROOT / "target" / target / "release" / f"{binary}{suffix}", stage)
-        for filename in ("LICENSE", "README.md"):
-            shutil.copy2(ROOT / filename, stage)
         shutil.copytree(ROOT / "docs", stage / "docs")
-        (stage / "models").mkdir()
-        for filename in ("LICENSE-NNUE", "README.md"):
-            shutil.copy2(ROOT / "models" / filename, stage / "models" / filename)
-        (stage / "scripts").mkdir()
-        shutil.copy2(ROOT / "scripts/reference.lock", stage / "scripts/reference.lock")
+        copy_notices(stage)
+        vendor = Path(temporary) / "vendor"
+        vendor_dependencies(vendor)
+        dependency_notices(vendor, stage)
         (stage / "MODEL-REQUIRED.txt").write_text(
             "NNUE weights are not included. Obtain the compatible model as documented in\n"
             "models/README.md and review models/LICENSE-NNUE before use or redistribution.\n"
             "Run the engine from this directory with the model at models/pikafish.nnue,\n"
             "or pass --eval-file PATH to the CLI / set PIKARUST_NNUE_FILE.\n", encoding="utf-8", newline="\n")
+        corresponding_source = source_info(release_version, sha)
+        (stage / "SOURCE.txt").write_text(
+            f"Engine license: {CODE_LICENSE}; see LICENSE and docs/licensing.md.\n"
+            f"Corresponding source for commit {sha}: {corresponding_source['archive']}\n"
+            f"Download from the same release: {corresponding_source['url']}\n"
+            "The source archive includes locked Cargo dependencies and their notices.\n"
+            "Keep the matching source available when redistributing these applications.\n", encoding="utf-8", newline="\n")
         metadata = {"version": release_version, "target": target, "commit": sha,
                     "rustc": compiler_version(),
-                    "nnue_included": False}
+                    "nnue_included": False, "code_license": CODE_LICENSE,
+                    "corresponding_source": corresponding_source}
         (stage / "build.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8", newline="\n")
         archive = output / archive_name(release_version, target)
         if windows:
@@ -310,31 +489,101 @@ def package(target: str, output: Path) -> None:
                         info.external_attr = path.stat().st_mode << 16
                         bundle.writestr(info, path.read_bytes())
         else:
-            def normalize(info):
-                info.uid = info.gid = 0
-                info.uname = info.gname = ""
-                info.mtime = timestamp
-                return info
-            with archive.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=timestamp) as compressed:
-                with tarfile.open(fileobj=compressed, mode="w") as bundle:
-                    bundle.add(stage, arcname=stem, filter=normalize)
+            write_tar(stage, archive, timestamp)
         validate_archive(archive, release_version, sha, target)
+        if clean_commit() != sha:
+            raise ValueError("source changed while preparing the application archive")
         checksum(archive)
         print(archive)
 
 
-def source(output: Path) -> None:
+def source(output: Path) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     release_version = version()
+    sha = clean_commit()
     stem = f"pikarust-{release_version}-source"
     archive = output / f"{stem}.tar.gz"
-    # Archive committed LFS pointers even when the checkout has hydrated weights.
-    subprocess.run(["git", "-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=",
-                    "-c", "filter.lfs.required=false", "archive", "--format=tar.gz", f"--prefix={stem}/",
-                    f"--output={archive.resolve()}", "HEAD"], cwd=ROOT, check=True)
-    validate_archive(archive, release_version, checked_sha(git("rev-parse", "HEAD")), "source")
+    with tempfile.TemporaryDirectory(prefix="pikarust-source-") as temporary:
+        tree = Path(temporary) / "tree.tar"
+        # Preserve committed LFS pointers even when the checkout has real weights.
+        subprocess.run(["git", "-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=",
+                        "-c", "filter.lfs.required=false", "archive", "--format=tar", f"--prefix={stem}/",
+                        f"--output={tree}", sha], cwd=ROOT, check=True)
+        with tarfile.open(tree) as bundle:
+            bundle.extractall(temporary, filter="data")
+        stage = Path(temporary) / stem
+        config = vendor_dependencies(stage / "vendor")
+        config_path = stage / ".cargo/config.toml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        config_path.write_text(existing + "\n" + config, encoding="utf-8", newline="\n")
+        dependency_notices(stage / "vendor", stage)
+        if clean_commit() != sha:
+            raise ValueError("source changed while preparing its corresponding source archive")
+        write_tar(stage, archive, int(git("show", "-s", "--format=%ct", sha)), sha)
+    validate_archive(archive, release_version, sha, "source")
     checksum(archive)
     print(archive)
+    return archive
+
+
+def npm_notices(stage: Path) -> None:
+    frontend = ROOT / "pikarust-web/frontend"
+    result = subprocess.run(["npm", "ls", "--omit=dev", "--all", "--parseable"], cwd=frontend,
+                            check=True, text=True, stdout=subprocess.PIPE)
+    entries = []
+    for value in result.stdout.splitlines():
+        package = Path(value)
+        if package.resolve() == frontend.resolve():
+            continue
+        metadata = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        paths = [path for path in package.iterdir() if path.is_file()
+                 and re.match(r"^(licen[cs]e|copying|notice|copyright)(?:$|[._-])", path.name, re.I)]
+        if not paths:
+            raise ValueError(f"{metadata['name']}: npm runtime dependency license text is missing")
+        directory = stage / "notices/dependencies/npm" / f"{metadata['name']}@{metadata['version']}"
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            if not path.read_bytes():
+                raise ValueError(f"empty npm license text: {path}")
+            shutil.copy2(path, directory / path.name)
+        entries.append({"name": metadata["name"], "version": metadata["version"], "license": metadata.get("license"),
+                        "files": {path.name: digest(path) for path in paths}})
+    directory = stage / "notices/dependencies/npm"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "manifest.json").write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def web(output: Path, expected_sha: str) -> None:
+    sha = clean_commit()
+    if sha != checked_sha(expected_sha):
+        raise ValueError("source commit changed during the Web build")
+    copy_notices(output)
+    shutil.copytree(ROOT / "docs", output / "docs", dirs_exist_ok=True)
+    archive = source(output)
+    prefix = f"pikarust-{version()}-source/"
+    with tarfile.open(archive) as bundle:
+        for entry in bundle.getmembers():
+            relative = entry.name.removeprefix(prefix)
+            if entry.isfile() and relative.startswith("notices/dependencies/"):
+                destination = output / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(bundle.extractfile(entry).read())
+    npm_notices(output)
+    (output / "SOURCE.txt").write_text(
+        f"Engine license: {CODE_LICENSE}; see LICENSE and docs/licensing.md.\n"
+        f"Corresponding source for commit {sha} is bundled as {archive.name}.\n"
+        "It includes the locked Cargo dependency sources and an offline Cargo configuration.\n"
+        "Retain that archive and its checksum when distributing this bundle.\n"
+        "Frontend and bridge code use MIT; model terms are separate in models/LICENSE-NNUE.\n", encoding="utf-8", newline="\n")
+    (output / "build.json").write_text(json.dumps({
+        "version": version(), "commit": sha, "code_license": CODE_LICENSE,
+        "component_licenses": {"engine": CODE_LICENSE, "bridge": "MIT", "frontend": "MIT"},
+        "corresponding_source": {"archive": archive.name, "commit": sha, "sha256": digest(archive)},
+        "nnue_included": True, "nnue_sha256": digest(output / "models/pikafish.nnue"),
+    }, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if clean_commit() != sha:
+        raise ValueError("source changed while preparing Web notices and corresponding source")
 
 
 def verify_artifacts(output: Path, sha: str, targets=TARGETS) -> list[Path]:
@@ -388,9 +637,12 @@ def finalize(mode: str, expected_sha: str, output: Path) -> None:
             "prerelease": "-" in release_version.split("+", 1)[0],
             "body": f"PikaRust native applications and Rust library sources.\n\nCommit: `{sha}`\n"
                     f"Validated by [CI](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run['id']}).\n\n"
-                    "NNUE weights are not bundled. See models/README.md, models/LICENSE-NNUE, "
-                    "and scripts/reference.lock for model setup and terms. Source notices and model terms "
-                    "have separate scopes; see the README license section. Cargo registry publication is disabled.\n",
+                    f"Engine code: GPL-3.0-or-later. Matching corresponding source: [{archive_name(release_version, 'source')}]"
+                    f"({source_info(release_version, sha)['url']}), including locked Cargo dependencies. "
+                    "Keep that source available when redistributing the applications. Independent MIT components "
+                    "and upstream notices are identified in LICENSE-MIT, NOTICE.md, and docs/licensing.md.\n\n"
+                    "NNUE weights are not bundled. Model weights have separate terms in models/LICENSE-NNUE; "
+                    "see models/README.md and scripts/reference.lock for setup. Cargo registry publication is disabled.\n",
         })
     missing = matching_assets(release.get("assets", []), artifacts)
     if missing:
@@ -416,7 +668,8 @@ def main() -> None:
     resolve_parser = commands.add_parser("resolve", help="find successful CI for an exact main commit")
     resolve_parser.add_argument("--commit", default="", help="default: the main dispatch commit")
     commands.add_parser("plan", help="validate the source version and existing tag/draft")
-    for command in ("package", "source", "verify", "finalize"):
+    commands.add_parser("clean", help="require clean committed distribution source and print its SHA")
+    for command in ("package", "source", "verify", "finalize", "web"):
         command_parser = commands.add_parser(command)
         command_parser.add_argument("--output", type=Path, default=ROOT / "target/release-artifacts")
         if command == "package":
@@ -425,6 +678,8 @@ def main() -> None:
             command_parser.add_argument("--target", choices=TARGETS, help="verify one platform plus source; default: all platforms")
         if command == "finalize":
             command_parser.add_argument("--mode", required=True, choices=("draft", "publish"))
+            command_parser.add_argument("--sha", required=True)
+        if command == "web":
             command_parser.add_argument("--sha", required=True)
     args = parser.parse_args()
     ROOT = args.root.resolve()
@@ -436,6 +691,11 @@ def main() -> None:
         package(args.target, args.output)
     elif args.command == "source":
         source(args.output)
+    elif args.command == "clean":
+        version()
+        print(clean_commit())
+    elif args.command == "web":
+        web(args.output, args.sha)
     elif args.command == "verify":
         artifacts = verify_artifacts(args.output, checked_sha(git("rev-parse", "HEAD")),
                                      (args.target,) if args.target else TARGETS)

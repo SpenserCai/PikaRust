@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
+// Copyright (c) 2026 SpenserCai and PikaRust contributors
+// Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
+
 use crate::position::rule_judge::RuleJudgeResult;
 use crate::position::{GenType, generate};
 use crate::types::{

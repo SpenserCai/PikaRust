@@ -57,6 +57,8 @@ its separate usage terms. Release application archives do not contain weights.
 
 Use a Git dependency to embed the library. Add a `rev` pin for the commit your
 application has validated; registry publication is not enabled.
+The library is `GPL-3.0-or-later`; see [licensing](docs/licensing.md) for embedding
+and source-distribution requirements.
 
 ```toml
 [dependencies]
@@ -139,6 +141,10 @@ cd pikarust-web/dist
 ./pikarust-bridge --engine-path ./pikarust --static-dir .
 ```
 
+The distribution builder requires a clean committed checkout and includes source
+matching the bundled binaries. For work with uncommitted changes, use the
+[local development commands](CONTRIBUTING.md#local-web-development).
+
 The local bundle includes the selected model and its license terms. Set
 `PIKARUST_NNUE_FILE` before building to select another model path. Open
 <http://localhost:9000>. The browser talks to a native engine through the bridge;
@@ -179,6 +185,7 @@ authentication and resource isolation are not provided.
 - [Architecture](docs/architecture.md): engine and application boundaries.
 - [Validation](docs/validation.md): reference alignment and strength evidence.
 - [Releases](docs/releases.md): manual release workflow and distribution.
+- [Licensing](docs/licensing.md): component licenses, provenance, and source distribution.
 - [AGENTS.md](AGENTS.md): persistent instructions for automated contributors.
 
 CI validates Rust quality, native platforms, the browser application, and
@@ -189,11 +196,11 @@ tagging is required. See [releases](docs/releases.md) for inputs and checks.
 
 ## Licenses and acknowledgments
 
-Original PikaRust contributions are offered under the [MIT License](LICENSE).
-Pikafish and Stockfish retain their
-[upstream GPLv3 terms](https://github.com/official-pikafish/Pikafish/blob/76239d0b06720bfa4588989fd4ac7573e9dbf887/Copying.txt).
-Distribution of work derived from those projects must also comply with those
-terms; the MIT declaration does not relicense upstream-derived code.
+The engine library and the programs that link it use
+[GPL-3.0-or-later](LICENSE). The independent UCI parser, web bridge, and frontend
+retain [MIT](LICENSE-MIT). See [licensing](docs/licensing.md) for the component
+map and distribution requirements, and [NOTICE.md](NOTICE.md) for Pikafish and
+Stockfish provenance.
 
 The model retains its original [NNUE terms](models/LICENSE-NNUE), including the
 requirement for permission for commercial use. The code license does not cover

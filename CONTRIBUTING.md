@@ -3,6 +3,7 @@
 PikaRust develops a reusable Xiangqi engine, native applications, and repeatable
 validation against a pinned Pikafish revision. Read [architecture](docs/architecture.md)
 for component boundaries and [validation](docs/validation.md) for test semantics.
+Follow the [component licensing policy](docs/licensing.md) when adding or moving code.
 Automation agents also follow [AGENTS.md](AGENTS.md).
 
 ## Development environment
@@ -87,6 +88,31 @@ See [validation](docs/validation.md) for slow tests, strength experiments, and
 interpreting differences. The workflow files specify the required platform and
 toolchain matrix; a successful local run does not replace those jobs.
 
+## Local web development
+
+Use the bridge and Vite dev server while editing uncommitted code. From the
+repository root, build the engine and start the bridge in one terminal:
+
+```sh
+cargo build --locked -p pikarust-app --bin pikarust
+PIKARUST_NNUE_FILE="$PWD/models/pikafish.nnue" \
+  cargo run --locked -p pikarust-bridge -- \
+  --engine-path "$PWD/target/debug/pikarust"
+```
+
+In a second terminal, start the frontend and open the URL printed by Vite:
+
+```sh
+npm --prefix pikarust-web/frontend ci
+npm --prefix pikarust-web/frontend run dev
+```
+
+The development frontend connects to the bridge on port 9000. Rebuild the native
+engine after Rust changes and reconnect the browser to start a new engine process.
+`scripts/build-web.sh` creates a distribution bundle with matching source and
+notices; commit changes before using it. Its clean-worktree requirement does not
+apply to normal `cargo` or npm development commands.
+
 ## Dependencies, versions, and documentation
 
 Declare shared Rust dependencies at the workspace root. Keep the lockfile in the
@@ -113,5 +139,18 @@ artifacts rather than committing temporary documents.
 
 Release preparation follows [releases](docs/releases.md). Do not include model
 weights in crate packages or alter existing license notices as routine cleanup.
-Upstream source provenance and NNUE terms must be reviewed before enabling
-registry publication or publishing a distribution.
+
+## Licensing contributions
+
+The engine and directly linked applications use `GPL-3.0-or-later`. Only the
+independent components listed in [licensing](docs/licensing.md) retain MIT.
+Contributions must be compatible with the affected component's license; do not
+copy GPL engine code into an MIT component without revising its license scope.
+Preserve upstream copyright and license notices, record source revisions and
+modifications in [NOTICE.md](NOTICE.md), and retain the associated Git history.
+
+Keep package metadata, source notices, documentation, and distributed license
+files consistent. Binary distributions must include corresponding source and
+dependency notices as described in the release policy. NNUE terms are separate
+and unchanged. Registry publishing remains disabled until its package and
+license checks are explicitly reviewed.

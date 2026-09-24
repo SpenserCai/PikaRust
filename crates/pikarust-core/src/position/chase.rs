@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
+// Copyright (c) 2026 SpenserCai and PikaRust contributors
+// Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
+
 use crate::bitboard::{
     Bitboard, HALF_BB, attacks_bb_bishop, attacks_bb_cannon, attacks_bb_knight, attacks_bb_rook,
     between_bb, pawn_attacks_bb, square_bb,

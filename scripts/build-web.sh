@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$ROOT_DIR/pikarust-web/dist"
 MODEL_FILE="${PIKARUST_NNUE_FILE:-$ROOT_DIR/models/pikafish.nnue}"
+SOURCE_COMMIT="$(python3 "$SCRIPT_DIR/release.py" clean)"
 
 # A runnable bundle must include the selected network and its terms.
 python3 - "$MODEL_FILE" <<'PYMODEL'
@@ -40,6 +41,9 @@ cd "$ROOT_DIR/pikarust-web/frontend"
 npm ci --silent
 npm run build
 cp -r dist/* "$DIST_DIR/"
+
+# Ship the exact committed sources, locked Rust dependencies, and dependency notices.
+python3 "$SCRIPT_DIR/release.py" web --sha "$SOURCE_COMMIT" --output "$DIST_DIR"
 
 echo ""
 echo "=== Build complete: $DIST_DIR ==="

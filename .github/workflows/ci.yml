@@ -130,6 +130,17 @@ jobs:
           python scripts/release.py package --target '${{ matrix.target }}' --output target/release-smoke
           python scripts/release.py source --output target/release-smoke
           python scripts/release.py verify --target '${{ matrix.target }}' --output target/release-smoke
+      - name: Build the corresponding source offline with an empty Cargo cache
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          version=$(python scripts/check-release.py --field version)
+          source_directory="$RUNNER_TEMP/pikarust-corresponding-source"
+          mkdir -p "$source_directory"
+          tar -xzf "target/release-smoke/pikarust-$version-source.tar.gz" -C "$source_directory"
+          cd "$source_directory/pikarust-$version-source"
+          CARGO_HOME="$RUNNER_TEMP/pikarust-offline-cargo" \
+            CARGO_TARGET_DIR="$RUNNER_TEMP/pikarust-offline-target" \
+            cargo build --offline --locked --release -p pikarust-app --features server --bins
 
   msrv:
     name: Minimum supported Rust

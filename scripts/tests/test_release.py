@@ -1,15 +1,18 @@
 """Release boundaries: exact CI, immutable refs, historical sources, and artifacts."""
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 
@@ -219,14 +222,17 @@ class ArtifactTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        files = {"Cargo.toml": '[workspace]\nmembers=["crates/example"]\n[workspace.package]\nversion="0.1.0"\nedition="2024"\nrust-version="1.85"\n[workspace.dependencies]\nexample={path="crates/example",version="0.1.0"}\n',
-                 "Cargo.lock": 'version=4\n[[package]]\nname="example"\nversion="0.1.0"\n',
-                 "crates/example/Cargo.toml": '[package]\nname="example"\nversion.workspace=true\nedition.workspace=true\nrust-version.workspace=true\n',
-                 "rust-toolchain.toml": '[toolchain]\nchannel="1.85.0"\n', "LICENSE": "source terms", "README.md": "readme",
+        files = {"Cargo.toml": '[workspace]\nmembers=["crates/example"]\n[workspace.package]\nversion="0.1.0"\nedition="2024"\nrust-version="1.85"\nlicense="GPL-3.0-or-later"\nrepository="https://github.com/owner/repo"\n[workspace.dependencies]\nexample={path="crates/example",version="0.1.0"}\n',
+                 "Cargo.lock": 'version=4\n[[package]]\nname="example"\nversion="0.1.0"\n[[package]]\nname="dependency"\nversion="1.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + "c" * 64 + '"\n',
+                 "crates/example/Cargo.toml": '[package]\nname="example"\nversion.workspace=true\nedition.workspace=true\nrust-version.workspace=true\nlicense.workspace=true\n',
+                 ".gitignore": "/target/\n/artifacts/\n/smudge.py\n/smudge-called\n/with-smudge.tar\n",
+                 "rust-toolchain.toml": '[toolchain]\nchannel="1.85.0"\n', "README.md": "readme", "CONTRIBUTING.md": "development guide",
                  "docs/releases.md": "release guide", "models/LICENSE-NNUE": "model terms", "models/README.md": "model setup",
                  "models/pikafish.nnue": "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a" * 64 + "\nsize 100000000\n",
                  "scripts/reference.lock": "reference pins"}
-        package = {"name": "pikarust-web", "version": "0.1.0"}
+        for name in release.LICENSE_FILES:
+            files[name] = (release.ROOT / name).read_text(encoding="utf-8")
+        package = {"name": "pikarust-web", "version": "0.1.0", "license": "MIT"}
         files["pikarust-web/frontend/package.json"] = json.dumps(package)
         files["pikarust-web/frontend/package-lock.json"] = json.dumps({**package, "packages": {"": package}})
         for name, content in files.items():
@@ -245,9 +251,49 @@ class ArtifactTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"application fixture")
         for mocked in (patch.object(release, "ROOT", self.root), patch.object(check_release, "ROOT", self.root),
-                       patch.object(release, "compiler_version", return_value="rustc fixture")):
+                       patch.object(release, "compiler_version", return_value="rustc fixture"),
+                       patch.object(release, "vendor_dependencies", side_effect=self.fixture_vendor)):
             mocked.start()
             self.addCleanup(mocked.stop)
+
+    def fixture_vendor(self, directory):
+        crate = directory / "dependency-1.0.0"
+        crate.mkdir(parents=True)
+        files = {"Cargo.toml": b'[package]\nname="dependency"\nversion="1.0.0"\nlicense="MIT"\n',
+                 "LICENSE": b"Fixture dependency license and copyright notice", "src/lib.rs": b"// fixture source\n",
+                 "src/empty.rs": b""}
+        for name, contents in files.items():
+            path = crate / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+        (crate / ".cargo-checksum.json").write_text(json.dumps({"package": "c" * 64,
+            "files": {name: hashlib.sha256(contents).hexdigest() for name, contents in files.items()}}))
+        return '[source.crates-io]\nreplace-with="vendored-sources"\n[source.vendored-sources]\ndirectory="vendor"\n'
+
+    def changed_archive(self, path, remove=None, replacements=None):
+        replacements = replacements or {}
+        temporary = self.root / "target/archive-edit"
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        temporary.mkdir(parents=True)
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                archive.extractall(temporary)
+        else:
+            with tarfile.open(path) as archive:
+                archive.extractall(temporary, filter="data")
+        stage, = temporary.iterdir()
+        if remove:
+            (stage / remove).unlink()
+        for name, contents in replacements.items():
+            (stage / name).write_bytes(contents)
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path, "w") as archive:
+                for item in stage.rglob("*"):
+                    if item.is_file():
+                        archive.write(item, item.relative_to(temporary))
+        else:
+            release.write_tar(stage, path, 1, self.sha if stage.name.endswith("-source") else None)
 
     def test_all_archives_are_model_free_reproducible_and_tied_to_source(self):
         for target in release.TARGETS:
@@ -301,7 +347,8 @@ class ArtifactTests(unittest.TestCase):
             f"pathlib.Path({str(marker)!r}).write_text('called')\n"
             "sys.stdout.buffer.write(b'expanded model weights')\n", encoding="utf-8")
         command = f"{shlex.quote(Path(sys.executable).as_posix())} {shlex.quote(filter_script.as_posix())}"
-        for key, value in (("smudge", command), ("required", "true")):
+        clean_command = f"{shlex.quote(Path(sys.executable).as_posix())} -c {shlex.quote('import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())')}"
+        for key, value in (("smudge", command), ("clean", clean_command), ("required", "true")):
             subprocess.run(["git", "config", "--local", f"filter.lfs.{key}", value], cwd=self.root, check=True)
 
         # Exercise Git's real conversion path, not a subprocess mock.
@@ -317,6 +364,118 @@ class ArtifactTests(unittest.TestCase):
         pointer = subprocess.check_output(["git", "show", "HEAD:models/pikafish.nnue"], cwd=self.root)
         with tarfile.open(self.output / "pikarust-0.1.0-source.tar.gz") as archive:
             self.assertEqual(archive.extractfile("pikarust-0.1.0-source/models/pikafish.nnue").read(), pointer)
+
+    def test_tar_zip_and_source_require_full_licenses_and_dependency_notices(self):
+        for target in (release.TARGETS[0], release.TARGETS[2], "source"):
+            if target == "source":
+                release.source(self.output)
+            else:
+                release.package(target, self.output)
+            archive = self.output / release.archive_name("0.1.0", target)
+            original = archive.read_bytes()
+            for name in (*release.LICENSE_FILES, "notices/dependencies/dependency-1.0.0/LICENSE"):
+                with self.subTest(target=target, missing=name):
+                    archive.write_bytes(original)
+                    self.changed_archive(archive, remove=name)
+                    with self.assertRaisesRegex(ValueError, "missing or empty"):
+                        release.validate_archive(archive, "0.1.0", self.sha, target)
+            for name in ("LICENSE", "LICENSE-MIT"):
+                archive.write_bytes(original)
+                self.changed_archive(archive, replacements={name: b"License summary"})
+                with self.subTest(truncated=name), self.assertRaisesRegex(ValueError, "complete"):
+                    release.validate_archive(archive, "0.1.0", self.sha, target)
+
+    def test_source_requires_complete_exact_committed_project_and_vendored_dependencies(self):
+        archive = release.source(self.output)
+        original = archive.read_bytes()
+        for name in ("crates/example/Cargo.toml", "vendor/dependency-1.0.0/src/lib.rs"):
+            archive.write_bytes(original)
+            self.changed_archive(archive, remove=name)
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                release.validate_archive(archive, "0.1.0", self.sha, "source")
+        for name in ("crates/example/Cargo.toml", "vendor/dependency-1.0.0/src/lib.rs",
+                     ".cargo/config.toml", "notices/dependencies/dependency-1.0.0/LICENSE"):
+            archive.write_bytes(original)
+            self.changed_archive(archive, replacements={name: b"changed = true\n"})
+            with self.subTest(changed=name), self.assertRaises(ValueError):
+                release.validate_archive(archive, "0.1.0", self.sha, "source")
+
+    def test_binary_metadata_must_identify_matching_source_and_gpl(self):
+        target = release.TARGETS[0]
+        release.package(target, self.output)
+        archive = self.output / release.archive_name("0.1.0", target)
+        original = archive.read_bytes()
+        with tarfile.open(archive) as bundle:
+            metadata = json.load(bundle.extractfile(f"pikarust-0.1.0-{target}/build.json"))
+        for key, value in (("code_license", "MIT"), ("corresponding_source", {"commit": OTHER})):
+            archive.write_bytes(original)
+            self.changed_archive(archive, replacements={"build.json": json.dumps({**metadata, key: value}).encode()})
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "matching GPL corresponding source"):
+                release.validate_archive(archive, "0.1.0", self.sha, target)
+
+    def test_dependency_missing_license_requires_explicit_versioned_supplement(self):
+        vendor = self.root / "target/vendor"
+        self.fixture_vendor(vendor)
+        (vendor / "dependency-1.0.0/LICENSE").unlink()
+        with self.assertRaisesRegex(ValueError, "no dependency license"):
+            release.dependency_notices(vendor, self.output)
+        supplement = self.root / "notices/dependency-supplements/dependency-1.0.0"
+        supplement.mkdir(parents=True)
+        (supplement / "SOURCE.md").write_text("Fixture upstream commit and source URL")
+        with self.assertRaisesRegex(ValueError, "verified license text"):
+            release.dependency_notices(vendor, self.output)
+        (supplement / "LICENSE").write_text("Fixture upstream full license")
+        release.dependency_notices(vendor, self.output)
+        notices = json.loads((self.output / "notices/dependencies/manifest.json").read_text())
+        self.assertEqual(notices[0]["notice_source"], "supplement")
+        self.assertIn("SOURCE.md", notices[0]["files"])
+
+    def test_distribution_rejects_tracked_and_untracked_dirty_source(self):
+        self.assertEqual(release.clean_commit(), self.sha)
+        readme = self.root / "README.md"
+        original = readme.read_bytes()
+        readme.write_bytes(b"local edit")
+        with self.assertRaisesRegex(ValueError, "clean committed"):
+            release.source(self.output)
+        readme.write_bytes(original)
+        (self.root / "untracked-source.rs").write_bytes(b"// new source")
+        with self.assertRaisesRegex(ValueError, "clean committed"):
+            release.package(release.TARGETS[0], self.output)
+
+    def test_historical_mit_engine_metadata_cannot_be_released(self):
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text().replace('license="GPL-3.0-or-later"', 'license="MIT"'))
+        with self.assertRaisesRegex(ValueError, "historical MIT"):
+            check_release.validate_workspace()
+
+    def test_npm_runtime_notices_require_actual_nonempty_license_text(self):
+        frontend = self.root / "pikarust-web/frontend"
+        package = self.root / "target/node_modules/runtime"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": "runtime", "version": "1.0.0", "license": "MIT"}))
+        result = subprocess.CompletedProcess([], 0, stdout=f"{frontend}\n{package}\n")
+        with patch.object(release.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "license text is missing"):
+                release.npm_notices(self.output)
+            (package / "LICENSE").write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "empty npm license"):
+                release.npm_notices(self.output)
+            (package / "LICENSE").write_bytes(b"Fixture full runtime license")
+            release.npm_notices(self.output)
+        self.assertEqual((self.output / "notices/dependencies/npm/runtime@1.0.0/LICENSE").read_bytes(), b"Fixture full runtime license")
+
+    def test_frontend_license_scope_must_remain_mit(self):
+        frontend = self.root / "pikarust-web/frontend"
+        for filename, root in (("package.json", False), ("package-lock.json", True)):
+            path = frontend / filename
+            original = path.read_text()
+            data = json.loads(original)
+            package = data["packages"][""] if root else data
+            package["license"] = "GPL-3.0-or-later"
+            path.write_text(json.dumps(data))
+            with self.subTest(filename=filename), self.assertRaisesRegex(ValueError, "license must remain MIT"):
+                check_release.check_frontend_version("0.1.0")
+            path.write_text(original)
 
     def test_lockfile_workspace_version_cannot_lag_manifest(self):
         self.assertEqual(check_release.validate_workspace()["version"], "0.1.0")

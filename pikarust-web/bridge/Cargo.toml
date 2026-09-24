@@ -2,7 +2,7 @@
 name = "pikarust-bridge"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT"
 authors.workspace = true
 rust-version.workspace = true
 repository.workspace = true
