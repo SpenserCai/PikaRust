@@ -24,6 +24,7 @@ pub fn parse_command(input: &str) -> Result<UciCommand, UciError> {
         "ponderhit" => Ok(UciCommand::PonderHit),
         "flip" => Ok(UciCommand::Flip),
         "d" => Ok(UciCommand::D),
+        "eval" => Ok(UciCommand::Eval),
         "debug" => parse_debug(&mut tokens),
         "position" => parse_position(&mut tokens),
         "go" => parse_go(&mut tokens),
@@ -123,6 +124,9 @@ fn parse_go<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Result<UciCommand
             "depth" => {
                 params.depth = Some(parse_next_u32(&token_vec, &mut i)?);
             }
+            "perft" => {
+                params.perft = Some(parse_next_u32(&token_vec, &mut i)?);
+            }
             "nodes" => {
                 params.nodes = Some(parse_next_u64(&token_vec, &mut i)?);
             }
@@ -156,6 +160,7 @@ fn is_go_keyword(s: &str) -> bool {
             | "binc"
             | "movestogo"
             | "depth"
+            | "perft"
             | "nodes"
             | "movetime"
             | "infinite"
@@ -187,17 +192,21 @@ fn parse_set_option<'a>(
 ) -> Result<UciCommand, UciError> {
     let token_vec: Vec<&str> = tokens.collect();
 
-    let name_idx = token_vec
+    if !token_vec
+        .first()
+        .is_some_and(|token| token.eq_ignore_ascii_case("name"))
+    {
+        return Err(UciError::ParseError(
+            "expected 'name' after setoption".to_owned(),
+        ));
+    }
+    let value_idx = token_vec[1..]
         .iter()
-        .position(|t| t.eq_ignore_ascii_case("name"))
-        .ok_or_else(|| UciError::ParseError("expected 'name' after setoption".to_string()))?;
-
-    let value_idx = token_vec
-        .iter()
-        .position(|t| t.eq_ignore_ascii_case("value"));
+        .position(|t| t.eq_ignore_ascii_case("value"))
+        .map(|i| i + 1);
 
     let name_end = value_idx.unwrap_or(token_vec.len());
-    let name = token_vec[name_idx + 1..name_end].join(" ");
+    let name = token_vec[1..name_end].join(" ");
 
     if name.is_empty() {
         return Err(UciError::ParseError("option name is empty".to_string()));
@@ -618,5 +627,28 @@ mod tests {
         assert!(!params.infinite);
         assert!(!params.ponder);
         assert!(params.searchmoves.is_empty());
+    }
+    #[test]
+    fn malformed_setoption_never_panics() {
+        for command in [
+            "setoption value 10 name Hash",
+            "setoption value name",
+            "setoption name",
+            "setoption name value",
+        ] {
+            assert!(parse_command(command).is_err(), "{command}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_commands() {
+        assert_eq!(parse_command("eval").unwrap(), UciCommand::Eval);
+        assert_eq!(
+            parse_command("go perft 3").unwrap(),
+            UciCommand::Go(GoParams {
+                perft: Some(3),
+                ..GoParams::default()
+            })
+        );
     }
 }

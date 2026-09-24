@@ -9,6 +9,8 @@ pub struct GoParams {
     pub binc: Option<u64>,
     pub movestogo: Option<u32>,
     pub depth: Option<u32>,
+    /// Pikafish diagnostic extension: enumerate legal move trees.
+    pub perft: Option<u32>,
     pub nodes: Option<u64>,
     pub movetime: Option<u64>,
     pub infinite: bool,
@@ -46,4 +48,5 @@ pub enum UciCommand {
     Bench(Option<BenchParams>),
     Flip,
     D,
+    Eval,
 }

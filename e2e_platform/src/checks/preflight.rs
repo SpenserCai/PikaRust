@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Duration;
 
@@ -19,12 +20,24 @@ pub struct PreflightResult {
 
 /// Run all pre-flight checks. Returns the list of results.
 /// Critical failures (missing binaries/models) are included as failed checks.
-pub fn run_preflight(config: &E2eConfig) -> Vec<PreflightResult> {
+pub fn run_preflight(config: &E2eConfig, needs_reference: bool) -> Vec<PreflightResult> {
     let mut results = Vec::new();
 
     results.push(check_file("PikaRust binary", &config.pikarust_bin));
-    results.push(check_file("Pikafish binary", &config.pikafish_bin));
+    if needs_reference {
+        results.push(check_file("Pikafish binary", &config.pikafish_bin));
+    }
     results.push(check_file("NNUE model", &config.nnue_model));
+    results.push(check_model(&config.nnue_model));
+    if needs_reference {
+        results.push(check_reference(config));
+        results.push(check_model(&config.pikafish_cwd.join("pikafish.nnue")));
+    }
+    if config.baseline_bin.is_some() {
+        results.push(check_model(
+            &config.baseline_cwd.join("models/pikafish.nnue"),
+        ));
+    }
 
     if results.iter().any(|r| !r.passed) {
         return results;
@@ -36,19 +49,21 @@ pub fn run_preflight(config: &E2eConfig) -> Vec<PreflightResult> {
         &config.pikarust_cwd,
         config.default_timeout,
     ));
-    results.push(check_engine_handshake(
-        "Pikafish",
-        &config.pikafish_bin,
-        &config.pikafish_cwd,
-        config.default_timeout,
-    ));
+    if needs_reference {
+        results.push(check_engine_handshake(
+            "Pikafish",
+            &config.pikafish_bin,
+            &config.pikafish_cwd,
+            config.default_timeout,
+        ));
+    }
 
     results
 }
 
 /// Check that a file exists.
 fn check_file(name: &str, path: &Path) -> PreflightResult {
-    if path.exists() {
+    if path.is_file() {
         PreflightResult {
             name: format!("{name} exists"),
             passed: true,
@@ -104,4 +119,74 @@ fn do_handshake_check(
         .unwrap_or_else(|| "id name unknown".to_owned());
 
     Ok(id_line)
+}
+
+pub(crate) fn locked_value(key: &str) -> Option<&'static str> {
+    include_str!("../../../scripts/reference.lock")
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            (name == key).then_some(value)
+        })
+}
+
+pub(crate) fn sha256(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let len = file.read(&mut buffer)?;
+        if len == 0 {
+            break;
+        }
+        hash.update(&buffer[..len]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn check_model(path: &Path) -> PreflightResult {
+    let result = sha256(path);
+    let expected = locked_value("PIKAFISH_NNUE_SHA256").unwrap_or("");
+    let passed = result.as_ref().is_ok_and(|actual| actual == expected);
+    PreflightResult {
+        name: "NNUE SHA-256".to_owned(),
+        passed,
+        detail: format!(
+            "{}: expected={expected}, actual={}",
+            path.display(),
+            result.unwrap_or_else(|error| error.to_string())
+        ),
+    }
+}
+
+fn check_reference(config: &E2eConfig) -> PreflightResult {
+    let path = config
+        .pikafish_cwd
+        .parent()
+        .unwrap_or(&config.pikafish_cwd)
+        .join("reference.json");
+    let verify = || -> Result<(), String> {
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let expected_commit = locked_value("PIKAFISH_COMMIT").unwrap_or("");
+        let expected_nnue = locked_value("PIKAFISH_NNUE_SHA256").unwrap_or("");
+        let binary_hash = sha256(&config.pikafish_bin).map_err(|error| error.to_string())?;
+        if metadata["commit"].as_str() != Some(expected_commit)
+            || metadata["nnue_sha256"].as_str() != Some(expected_nnue)
+            || metadata["binary_sha256"].as_str() != Some(binary_hash.as_str())
+        {
+            return Err(
+                "reference metadata/binary mismatch; run scripts/setup-pikafish.sh".to_owned(),
+            );
+        }
+        Ok(())
+    };
+    let result = verify();
+    PreflightResult {
+        name: "reference provenance".to_owned(),
+        passed: result.is_ok(),
+        detail: result.map_or_else(|error| error, |()| path.display().to_string()),
+    }
 }

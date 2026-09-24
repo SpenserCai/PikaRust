@@ -1,11 +1,17 @@
 [package]
-name = "uci-rs"
+name = "pikarust-uci"
 description = "Universal Chess Interface (UCI) protocol library for Rust"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish.workspace = true
+
+[lib]
+name = "uci_rs"
 
 [dependencies]
 thiserror = { workspace = true }

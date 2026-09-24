@@ -8,7 +8,8 @@ use super::game_result::{DrawReason, GameResult};
 
 const START_FEN: &str = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
 
-/// Tracks game state using pikarust-core as an authoritative referee.
+/// Uses the core rules to adjudicate tests. This is not an independent referee;
+/// exact upstream perft checks separately validate legal move generation.
 pub struct GameState {
     position: Position,
     move_history: Vec<String>,
@@ -50,17 +51,15 @@ impl GameState {
         let legal_moves = generate(&self.position, GenType::Legal);
 
         if legal_moves.is_empty() {
-            let in_check = self.position.checkers().is_not_empty();
-            if in_check {
-                let winner = if self.position.side_to_move() == pikarust_core::types::Color::White {
-                    black_name.to_owned()
-                } else {
-                    white_name.to_owned()
-                };
-                return Some(GameResult::Checkmate { winner });
-            }
-            return Some(GameResult::Draw {
-                reason: DrawReason::Stalemate,
+            let winner = if self.position.side_to_move() == pikarust_core::types::Color::White {
+                black_name.to_owned()
+            } else {
+                white_name.to_owned()
+            };
+            return Some(if self.position.checkers().is_not_empty() {
+                GameResult::Checkmate { winner }
+            } else {
+                GameResult::Stalemate { winner }
             });
         }
 
@@ -73,6 +72,15 @@ impl GameState {
                 };
                 return Some(GameResult::Draw { reason });
             }
+            let white_wins = (value > VALUE_DRAW)
+                == (self.position.side_to_move() == pikarust_core::types::Color::White);
+            return Some(GameResult::RuleViolation {
+                winner: if white_wins {
+                    white_name.to_owned()
+                } else {
+                    black_name.to_owned()
+                },
+            });
         }
 
         None
@@ -123,5 +131,26 @@ fn parse_uci_move(pos: &Position, s: &str) -> Option<Move> {
     let to = Square::make(File::try_from(to_file).ok()?, Rank::try_from(to_rank).ok()?);
     let m = Move::make(from, to);
 
-    if pos.is_legal(m) { Some(m) } else { None }
+    if pos.is_legal_move(m) { Some(m) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn xiangqi_stalemate_is_a_loss() {
+        // Red rook on d8 controls d9/e8; f8 controls f9, without checking e9.
+        let mut game = GameState::from_fen("4k4/3R1R3/9/9/4P4/9/9/9/9/4K4 b - - 0 1").unwrap();
+        assert!(game.position.checkers().is_empty());
+        assert!(
+            matches!(game.check_game_end("red", "black"), Some(GameResult::Stalemate { winner }) if winner == "red")
+        );
+    }
+    #[test]
+    fn referee_rejects_non_pseudo_legal_moves_without_panicking() {
+        for mv in ["b0b5", "a9a8", "a0b0", "a1a2"] {
+            let mut game = GameState::new().unwrap();
+            assert!(game.apply_uci_move(mv, "fixture").is_err(), "{mv}");
+        }
+    }
 }

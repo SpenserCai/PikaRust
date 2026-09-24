@@ -76,6 +76,30 @@ impl Network {
         &self.simd
     }
 
+    /// Evaluate a complete position with freshly computed accumulators.
+    ///
+    /// Returns the PSQT and positional components in internal units from the
+    /// side-to-move perspective, independent of search history and optimism.
+    pub fn evaluate_position(&self, pos: &crate::position::Position) -> (Value, Value) {
+        let mut psq = super::Accumulator::new();
+        let mut threats = super::Accumulator::new();
+        super::feature_transformer::refresh_psq_accumulator(&self.model, pos, &mut psq, &self.simd);
+        super::feature_transformer::refresh_threat_accumulator(
+            &self.model,
+            pos,
+            &mut threats,
+            &self.simd,
+        );
+        self.evaluate(
+            &psq.accumulation,
+            &threats.accumulation,
+            &psq.psqt_accumulation,
+            &threats.psqt_accumulation,
+            pos.piece_count_array(),
+            pos.side_to_move(),
+        )
+    }
+
     pub fn evaluate(
         &self,
         psq_acc: &[[i16; TRANSFORMED_DIMS]; 2],
@@ -143,9 +167,11 @@ impl Network {
         self.simd
             .clipped_relu(&fc0_out[..L2_BIG], &mut relu_out, WEIGHT_SCALE_BITS);
 
-        let mut concat = [0u8; L2_BIG * 2];
+        // FC1 uses 62 activations in a 64-element padded input. The padding
+        // must be present and zero for both scalar and vector backends.
+        let mut concat = [0u8; 64];
         concat[..L2_BIG].copy_from_slice(&sqr_relu_out);
-        concat[L2_BIG..].copy_from_slice(&relu_out);
+        concat[L2_BIG..L2_BIG * 2].copy_from_slice(&relu_out);
 
         let mut fc1_out = [0i32; L3_BIG];
         self.simd.affine_propagate(

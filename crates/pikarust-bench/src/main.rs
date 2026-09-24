@@ -162,7 +162,7 @@ fn bench() {
         let pos_ms = pos_start.elapsed().as_millis().max(1) as u64;
         let pos_nps = 1000 * result.nodes / pos_ms;
         total_nodes += result.nodes;
-        eprintln!("\nPosition: {}/{} ({fen})", i + 1, BENCH_FENS.len(),);
+        eprintln!("\nPosition: {}/{} ({fen})", i + 1, BENCH_FENS.len());
         eprintln!(
             "info depth {} seldepth {} multipv 1 score cp {} nodes {} nps {} hashfull {} tbhits 0 time {} pv{}",
             result.depth,

@@ -32,10 +32,7 @@ const OPENING_FENS: &[(&str, &str)] = &[
         "2bakab2/6r2/2n1c1nc1/p1p2rp1p/4p4/2PN2PC1/P3P3P/6N2/3CA4/1RBAK1B1R w",
     ),
     // Endgame
-    (
-        "endgame",
-        "5a3/3k5/3aR4/9/5r3/5n3/9/3A1A3/5K3/2BC2B2 w",
-    ),
+    ("endgame", "5a3/3k5/3aR4/9/5r3/5n3/9/3A1A3/5K3/2BC2B2 w"),
 ];
 
 /// Gauntlet search time per move (ms).
@@ -58,24 +55,25 @@ impl GameScore {
     /// Score from the perspective of `engine_name`: 1.0 win, 0.5 draw, 0.0 loss.
     fn score_for(&self, engine_name: &str) -> f64 {
         match &self.result {
-            GameResult::Checkmate { winner } => {
-                if winner == engine_name { 1.0 } else { 0.0 }
+            GameResult::Checkmate { winner }
+            | GameResult::Stalemate { winner }
+            | GameResult::RuleViolation { winner } => {
+                if winner == engine_name {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             GameResult::Draw { .. } | GameResult::MaxMovesReached { .. } => 0.5,
             GameResult::EngineError { engine, .. } => {
-                if engine == engine_name { 0.0 } else { 1.0 }
+                if engine == engine_name {
+                    0.0
+                } else {
+                    1.0
+                }
             }
         }
     }
-}
-
-/// Compute Elo difference from score percentage.
-/// `score` is in [0, 1]. Returns None if score is 0 or 1 (infinite Elo diff).
-fn elo_diff(score: f64) -> Option<f64> {
-    if score <= 0.0 || score >= 1.0 {
-        return None;
-    }
-    Some(-400.0 * (1.0 / score - 1.0).log10())
 }
 
 /// Run a gauntlet: `white_engine` vs `opponent` across all openings, both colors.
@@ -103,12 +101,14 @@ fn run_gauntlet(
             max_moves: MAX_MOVES,
             response_timeout: config.search_timeout,
             hash_mb: HASH_MB,
+            nnue_model: Some(config.nnue_model.clone()),
             start_fen: Some(fen.to_owned()),
         };
         let record = run_match(&cfg)?;
         log::info!(
             "  {opening_name} ({white_name} as Red): {}, {} moves",
-            record.result, record.move_count
+            record.result,
+            record.move_count
         );
         results.push(GameScore {
             opening: opening_name,
@@ -129,12 +129,14 @@ fn run_gauntlet(
             max_moves: MAX_MOVES,
             response_timeout: config.search_timeout,
             hash_mb: HASH_MB,
+            nnue_model: Some(config.nnue_model.clone()),
             start_fen: Some(fen.to_owned()),
         };
         let record = run_match(&cfg)?;
         log::info!(
             "  {opening_name} ({white_name} as Black): {}, {} moves",
-            record.result, record.move_count
+            record.result,
+            record.move_count
         );
         results.push(GameScore {
             opening: opening_name,
@@ -173,15 +175,10 @@ fn summarize(engine_a: &str, engine_b: &str, results: &[GameScore]) -> String {
     let score = 0.5f64.mul_add(f64::from(draws), f64::from(wins)) / total;
     let pct = score * 100.0;
 
-    let elo_str = elo_diff(score).map_or_else(
-        || "Elo: N/A".to_owned(),
-        |e| format!("Elo diff: {e:+.0}"),
-    );
-
     let error_note = if has_error { " [ENGINE ERROR]" } else { "" };
 
     format!(
-        "{engine_a} vs {engine_b}: +{wins} ={draws} -{losses} ({pct:.1}%), {elo_str}{error_note}"
+        "{engine_a} vs {engine_b}: +{wins} ={draws} -{losses} ({pct:.1}%) — observational game completion/legality check only; no strength or Elo inference{error_note}"
     )
 }
 

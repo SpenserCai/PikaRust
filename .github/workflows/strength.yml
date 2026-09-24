@@ -1,0 +1,99 @@
+name: Strength experiments
+
+on:
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Official reference observation or paired PikaRust regression
+        type: choice
+        options: [official, regression]
+        default: official
+      baseline_ref:
+        description: Regression baseline commit or tag with a committed Cargo.lock
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strength-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+
+jobs:
+  games:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: false
+      - run: rustup show
+      - name: Verify NNUE and build the pinned reference
+        run: bash scripts/setup-pikafish.sh
+      - name: Build an explicitly selected regression baseline
+        if: inputs.suite == 'regression'
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BASELINE_REF" || "$BASELINE_REF" == -* ]]; then
+            echo 'Regression requires a baseline commit or tag.' >&2
+            exit 1
+          fi
+          baseline_sha=$(git rev-parse --verify "$BASELINE_REF^{commit}")
+          baseline_dir="$RUNNER_TEMP/pikarust-baseline"
+          git worktree add --detach "$baseline_dir" "$baseline_sha"
+          test -f "$baseline_dir/Cargo.lock"
+          cp models/pikafish.nnue "$baseline_dir/models/pikafish.nnue"
+          toolchain=$(python3 scripts/check-release.py --field toolchain)
+          CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-target" cargo +"$toolchain" build \
+            --release --locked --manifest-path "$baseline_dir/Cargo.toml" \
+            -p pikarust-app --bin pikarust
+          echo "PIKARUST_BASELINE_BIN=$RUNNER_TEMP/baseline-target/release/pikarust" >> "$GITHUB_ENV"
+          echo "PIKARUST_BASELINE_CWD=$baseline_dir" >> "$GITHUB_ENV"
+          mkdir -p target/e2e
+          echo "$baseline_sha" > target/e2e/baseline-commit.txt
+      - name: Record experiment provenance
+        run: |
+          mkdir -p target/e2e
+          git rev-parse HEAD > target/e2e/candidate-commit.txt
+          rustc --version --verbose > target/e2e/rustc.txt
+          lscpu > target/e2e/cpu.txt
+          cp scripts/reference.lock tests/fixtures/pikafish/reference.json target/e2e/
+      - name: Play paired openings with both colors
+        env:
+          REQUESTED_SUITE: ${{ inputs.suite }}
+          PIKARUST_E2E_REPORT: target/e2e/strength.json
+        run: |
+          set -euo pipefail
+          if [[ "$REQUESTED_SUITE" == regression ]]; then
+            bash scripts/run-e2e.sh --filter strength_regression 2>&1 | tee target/e2e/strength.log
+          else
+            bash scripts/run-e2e.sh --filter strength_gauntlet 2>&1 | tee target/e2e/strength.log
+          fi
+      - name: Explain the experiment's scope
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          Paired opening results, engine identities, model hashes, and execution logs
+          are available in the artifact. The official-reference run is an observation
+          of this build, not evidence of equal Elo or complete search parity. Hosted
+          runners are shared hardware; compare time controls and confidence intervals
+          before attributing score changes to the engine.
+          EOF
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: strength-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/e2e/
+          if-no-files-found: warn
+          retention-days: 90

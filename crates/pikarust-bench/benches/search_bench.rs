@@ -76,7 +76,7 @@ fn bench_tt_probe(c: &mut Criterion) {
     let result = tt.probe(key);
     result
         .writer
-        .write(key, 100, true, Bound::Exact, 5, m, 50, tt.generation());
+        .write(&tt, key, 100, true, Bound::Exact, 5, m, 50, tt.generation());
 
     c.bench_function("tt_probe_hit", |b| {
         b.iter(|| {
@@ -105,8 +105,17 @@ fn bench_tt_write(c: &mut Criterion) {
         let mut key: u64 = 0;
         b.iter(|| {
             let r = tt.probe(key);
-            r.writer
-                .write(key, 100, false, Bound::Lower, 5, m, 50, tt.generation());
+            r.writer.write(
+                &tt,
+                key,
+                100,
+                false,
+                Bound::Lower,
+                5,
+                m,
+                50,
+                tt.generation(),
+            );
             key = key.wrapping_add(1);
         });
     });

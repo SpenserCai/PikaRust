@@ -1,0 +1,4 @@
+# Official reference used by algorithm conformance tests. Review both pins together.
+PIKAFISH_REPOSITORY=https://github.com/official-pikafish/Pikafish.git
+PIKAFISH_COMMIT=76239d0b06720bfa4588989fd4ac7573e9dbf887
+PIKAFISH_NNUE_SHA256=92b5fb5d333800654377a93ad8d28d0b4c8b34fb9a3d1cdaafd6ecdfb3459bb2

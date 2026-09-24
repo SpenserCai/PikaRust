@@ -17,6 +17,7 @@ pub struct ThreadPool {
     handles: Vec<Option<thread::JoinHandle<Worker>>>,
     stop: Arc<AtomicBool>,
     ponder: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
     tt: Arc<TranspositionTable>,
     increase_depth: Arc<AtomicBool>,
     tot_best_move_changes: Arc<AtomicU64>,
@@ -55,6 +56,7 @@ impl ThreadPool {
             handles: Vec::new(),
             stop,
             ponder,
+            failed: Arc::new(AtomicBool::new(false)),
             tt,
             increase_depth,
             tot_best_move_changes,
@@ -103,8 +105,11 @@ impl ThreadPool {
     pub fn start_search(&mut self, pos: &Position, limits: &SearchLimits) {
         self.recover_workers();
 
-        self.stop.store(false, Ordering::SeqCst);
-        self.ponder.store(limits.ponder_mode, Ordering::SeqCst);
+        // Each search owns its cancellation flags. Handles from a completed
+        // search must never be able to cancel or resume a later search.
+        self.stop = Arc::new(AtomicBool::new(false));
+        self.ponder = Arc::new(AtomicBool::new(limits.ponder_mode));
+        self.failed = Arc::new(AtomicBool::new(false));
         self.increase_depth.store(true, Ordering::SeqCst);
         self.tot_best_move_changes.store(0, Ordering::SeqCst);
         self.tt.new_search();
@@ -116,6 +121,8 @@ impl ThreadPool {
         }
 
         for w in &mut self.workers {
+            w.stop = Arc::clone(&self.stop);
+            w.ponder = Arc::clone(&self.ponder);
             w.limits = limits.clone();
             w.nodes.store(0, Ordering::Relaxed);
             w.best_move_changes.store(0, Ordering::Relaxed);
@@ -127,9 +134,10 @@ impl ThreadPool {
         }
 
         let mut handles = Vec::new();
-        let workers_to_spawn: Vec<Worker> = self.workers.drain(..).collect();
+        let workers_to_spawn: Vec<Worker> = mem::take(&mut self.workers);
 
         for mut w in workers_to_spawn {
+            let failed = Arc::clone(&self.failed);
             let handle = thread::spawn(move || {
                 let stop = Arc::clone(&w.stop);
                 let ponder = Arc::clone(&w.ponder);
@@ -153,8 +161,9 @@ impl ThreadPool {
                             .or_else(|| payload.downcast_ref::<String>().cloned())
                             .unwrap_or_else(|| "unknown panic".to_owned());
                         log::error!("search worker {thread_idx} panicked: {msg}");
+                        failed.store(true, Ordering::Relaxed);
                         stop.store(true, Ordering::SeqCst);
-                        Worker::new(
+                        let mut recovered = Worker::new(
                             thread_idx,
                             stop,
                             ponder,
@@ -163,7 +172,9 @@ impl ThreadPool {
                             tot_best_move_changes,
                             num_threads,
                             network,
-                        )
+                        );
+                        recovered.clear();
+                        recovered
                     }
                 }
             });
@@ -183,22 +194,29 @@ impl ThreadPool {
         let (tx, rx) = mpsc::sync_channel(1);
         let handles = mem::take(&mut self.handles);
         let worker_return_tx = self.worker_return.clone();
+        let failed = Arc::clone(&self.failed);
 
         let collector = thread::spawn(move || {
             let mut workers = Vec::new();
             for h in handles.into_iter().flatten() {
-                match h.join() {
-                    Ok(w) => workers.push(w),
-                    Err(_) => {
-                        log::error!("search thread join failed in collector");
-                    }
+                if let Ok(worker) = h.join() {
+                    workers.push(worker);
+                } else {
+                    failed.store(true, Ordering::Relaxed);
+                    log::error!("search thread join failed in collector");
                 }
             }
             workers.sort_by_key(|w| w.thread_idx);
 
-            let result = extract_search_result(&workers);
+            // Joining establishes visibility of every worker's failure flag.
+            // Recovered workers remain reusable, but their empty search state
+            // must never be presented as a successful result. Dropping `tx`
+            // reports a disconnected search to the checked handle API.
+            let result = (!failed.load(Ordering::Relaxed)).then(|| extract_search_result(&workers));
             let _ = worker_return_tx.send(workers);
-            let _ = tx.send(result);
+            if let Some(result) = result {
+                let _ = tx.send(result);
+            }
         });
 
         self.collector_handle = Some(collector);
@@ -215,6 +233,13 @@ impl ThreadPool {
 
     pub const fn stop_flag(&self) -> &Arc<AtomicBool> {
         &self.stop
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_worker_failure(&mut self) {
+        // Exercise the real panic/recovery path without a model fixture or a
+        // production failure hook. Search always indexes this stack.
+        self.workers[0].ss_static_evals.clear();
     }
 }
 
@@ -387,4 +412,72 @@ fn build_root_moves(pos: &Position, limits: &SearchLimits) -> Vec<RootMove> {
     }
 
     root_moves
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Piece, PieceType, Square};
+    use std::time::Duration;
+
+    fn history_biases(worker: &Worker) -> [i16; 4] {
+        [
+            worker
+                .capture_history
+                .get(Piece::W_ROOK, Square::SQ_A1, PieceType::Pawn),
+            worker
+                .continuation_history
+                .get(false, false, Piece::W_KNIGHT, Square::SQ_B0)
+                .get(Piece::W_PAWN, Square::SQ_A3),
+            worker
+                .pawn_history
+                .entry(0)
+                .get(Piece::W_PAWN, Square::SQ_A3),
+            worker
+                .continuation_correction_history
+                .get(Piece::W_KNIGHT, Square::SQ_B0)
+                .get(Piece::W_PAWN, Square::SQ_A3),
+        ]
+    }
+
+    #[test]
+    fn recovered_worker_matches_canonical_initialization() {
+        let mut recovered = ThreadPool::new(1, 1, None);
+        let mut fresh = ThreadPool::new(1, 1, None);
+        recovered.clear();
+        fresh.clear();
+        let pos = Position::start_pos().unwrap();
+        let mut limits = SearchLimits::new();
+        limits.depth = 3;
+
+        recovered.inject_worker_failure();
+        let failed = recovered.start_search_async(&pos, &limits);
+        assert!(matches!(
+            failed.recv_timeout(Duration::from_secs(5)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        recovered.recover_workers();
+        assert_eq!(recovered.workers.len(), 1);
+        assert_eq!(
+            history_biases(&recovered.workers[0]),
+            history_biases(&fresh.workers[0])
+        );
+
+        // Remove entries written before the injected failure, so the search
+        // comparison isolates worker initialization rather than cache warmth.
+        recovered.tt.clear();
+        let actual = recovered
+            .start_search_async(&pos, &limits)
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let expected = fresh
+            .start_search_async(&pos, &limits)
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(actual.best_move, expected.best_move);
+        assert_eq!(actual.score, expected.score);
+        assert_eq!(actual.depth, expected.depth);
+        assert_eq!(actual.nodes, expected.nodes);
+        assert_eq!(actual.pv, expected.pv);
+    }
 }

@@ -73,16 +73,21 @@ export function useEngine() {
   const bestMoveIdRef = useRef(0);
 
   const connect = useCallback(() => {
-    const url = import.meta.env.PROD ? `ws://${window.location.host}/ws` : 'ws://localhost:9000/ws';
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = import.meta.env.PROD ? `${scheme}://${window.location.host}/ws` : 'ws://localhost:9000/ws';
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      if (wsRef.current === ws) setConnected(true);
+    };
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       setConnected(false);
       reconnectTimer.current = setTimeout(connect, 2000);
     };
     ws.onmessage = (e: MessageEvent<string>) => {
+      if (wsRef.current !== ws) return;
       for (const line of e.data.split('\n')) {
         if (!line.trim()) continue;
         const msg = categorize(line.trim());
@@ -104,7 +109,9 @@ export function useEngine() {
     connect();
     return () => {
       clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws?.close();
     };
   }, [connect]);
 

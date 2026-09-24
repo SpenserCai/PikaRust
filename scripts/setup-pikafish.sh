@@ -1,153 +1,75 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Build the pinned official engine in an ignored, disposable reference directory.
 set -euo pipefail
-
-# ============================================================================
-# setup-pikafish.sh
-#
-# Clones, checks out, and compiles a pinned version of Pikafish for use in
-# PikaRust integration tests and benchmark comparisons.
-#
-# Output: tests/fixtures/pikafish/bin/pikafish
-# ============================================================================
-
-PIKAFISH_REPO="https://github.com/official-pikafish/Pikafish"
-PIKAFISH_COMMIT="76239d0b06720bfa4588989fd4ac7573e9dbf887"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/reference.lock
+source "$SCRIPT_DIR/reference.lock"
 FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/pikafish"
-BUILD_DIR="$FIXTURE_DIR/build"
-BIN_DIR="$FIXTURE_DIR/bin"
-MODEL_SRC="$PROJECT_ROOT/models/pikafish.nnue"
+SOURCE_DIR="${PIKAFISH_SOURCE_DIR:-$FIXTURE_DIR/source}"
+MODEL="${PIKARUST_NNUE_MODEL:-$PROJECT_ROOT/models/pikafish.nnue}"
 
-# --- Detect platform and architecture ---
-
-detect_arch() {
-    local kernel arch
-    kernel="$(uname -s)"
-    arch="$(uname -m)"
-
-    case "$kernel" in
-        Darwin)
-            case "$arch" in
-                arm64) echo "apple-silicon" ;;
-                x86_64) echo "x86-64-avx2" ;;
-                *) echo "x86-64" ;;
-            esac
-            ;;
-        Linux)
-            case "$arch" in
-                x86_64) echo "x86-64-avx2" ;;
-                aarch64) echo "armv8" ;;
-                *) echo "x86-64" ;;
-            esac
-            ;;
-        *)
-            echo "x86-64"
-            ;;
-    esac
+verify_model() {
+    [[ -f "$MODEL" ]] || { echo "Missing NNUE: $MODEL (run git lfs pull)" >&2; exit 1; }
+    local actual
+    if command -v sha256sum >/dev/null; then
+        actual="$(sha256sum "$MODEL" | awk '{print $1}')"
+    else
+        actual="$(shasum -a 256 "$MODEL" | awk '{print $1}')"
+    fi
+    [[ "$actual" == "$PIKAFISH_NNUE_SHA256" ]] || {
+        echo "NNUE hash mismatch: expected $PIKAFISH_NNUE_SHA256, got $actual" >&2; exit 1;
+    }
+    echo "NNUE SHA-256 verified: $actual"
 }
-
-# --- Clone or update ---
 
 setup_source() {
-    if [ -d "$BUILD_DIR/.git" ]; then
-        echo "[1/4] Pikafish source exists, verifying commit..."
-        local current_commit
-        current_commit="$(git -C "$BUILD_DIR" rev-parse HEAD)"
-        if [ "$current_commit" = "$PIKAFISH_COMMIT" ]; then
-            echo "  Already at $PIKAFISH_COMMIT"
-            return 0
-        fi
-        echo "  Commit mismatch ($current_commit), resetting..."
-        git -C "$BUILD_DIR" fetch origin
-        git -C "$BUILD_DIR" checkout "$PIKAFISH_COMMIT"
-    else
-        echo "[1/4] Cloning Pikafish..."
-        mkdir -p "$FIXTURE_DIR"
-        git clone "$PIKAFISH_REPO" "$BUILD_DIR"
-        git -C "$BUILD_DIR" checkout "$PIKAFISH_COMMIT"
+    if [[ ! -d "$SOURCE_DIR/.git" ]]; then
+        [[ ! -e "$SOURCE_DIR" ]] || { echo "Refusing non-git directory: $SOURCE_DIR" >&2; exit 1; }
+        git init "$SOURCE_DIR"
+        git -C "$SOURCE_DIR" remote add origin "$PIKAFISH_REPOSITORY"
+        git -C "$SOURCE_DIR" fetch --depth 1 origin "$PIKAFISH_COMMIT"
+        git -C "$SOURCE_DIR" checkout --detach FETCH_HEAD
     fi
-    echo "  Pinned to commit: $PIKAFISH_COMMIT"
+    [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$PIKAFISH_COMMIT" ]] || {
+        echo "Reference checkout has another revision; use a new PIKAFISH_SOURCE_DIR" >&2; exit 1;
+    }
+    [[ -z "$(git -C "$SOURCE_DIR" status --porcelain --untracked-files=no)" ]] || {
+        echo "Reference has tracked modifications; refusing to build an unverified source" >&2; exit 1;
+    }
+    echo "Reference: $PIKAFISH_REPOSITORY @ $PIKAFISH_COMMIT ($SOURCE_DIR)"
 }
 
-# --- Build ---
-
-build_pikafish() {
-    local arch
-    arch="$(detect_arch)"
-    echo "[2/4] Building Pikafish (ARCH=$arch)..."
-
-    local nproc_cmd
-    if command -v nproc >/dev/null 2>&1; then
-        nproc_cmd="$(nproc)"
-    else
-        nproc_cmd="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-    fi
-
-    mkdir -p "$BIN_DIR"
-
-    # Copy NNUE model to build dir so Pikafish can find it
-    if [ -f "$MODEL_SRC" ]; then
-        cp "$MODEL_SRC" "$BUILD_DIR/src/pikafish.nnue"
-        echo "  Copied pikafish.nnue from models/"
-    else
-        echo "  WARNING: models/pikafish.nnue not found, Pikafish will try to download it"
-    fi
-
-    cd "$BUILD_DIR/src"
-    make -j"$nproc_cmd" build ARCH="$arch"
-    cp pikafish "$BIN_DIR/pikafish"
-    echo "  Binary: $BIN_DIR/pikafish"
-}
-
-# --- Verify ---
-
-verify_build() {
-    echo "[3/4] Verifying build..."
-    if [ ! -x "$BIN_DIR/pikafish" ]; then
-        echo "  ERROR: pikafish binary not found or not executable"
-        exit 1
-    fi
-
-    # Quick smoke test: run bench with depth 1
-    local output
-    output=$("$BIN_DIR/pikafish" bench 1 1 1 2>&1 | tail -5)
-    echo "  Smoke test output:"
-    echo "$output" | sed 's/^/    /'
-    echo "  Build verified successfully"
-}
-
-# --- Summary ---
-
-print_summary() {
-    echo "[4/4] Setup complete"
-    echo ""
-    echo "  Pikafish commit: $PIKAFISH_COMMIT"
-    echo "  Architecture:    $(detect_arch)"
-    echo "  Binary:          $BIN_DIR/pikafish"
-    echo "  NNUE model:      $MODEL_SRC"
-    echo ""
-    echo "Usage:"
-    echo "  # Run bench (NPS baseline)"
-    echo "  $BIN_DIR/pikafish bench"
-    echo ""
-    echo "  # Run perft"
-    echo "  echo 'position startpos' | $BIN_DIR/pikafish"
-    echo ""
-    echo "  # UCI mode"
-    echo "  $BIN_DIR/pikafish"
-}
-
-# --- Main ---
-
-main() {
-    echo "=== PikaRust: Pikafish Setup ==="
-    echo ""
-    setup_source
-    build_pikafish
-    verify_build
-    print_summary
-}
-
-main "$@"
+case "${1:-build}" in
+    --verify-model) verify_model; exit ;;
+    --source-only) setup_source; exit ;;
+    build) ;;
+    *) echo "Usage: $0 [build | --source-only | --verify-model]" >&2; exit 2 ;;
+esac
+verify_model
+setup_source
+case "$(uname -m)" in
+    x86_64) build_arch=x86-64 ;;
+    arm64|aarch64) build_arch=armv8 ;;
+    *) build_arch="${PIKAFISH_ARCH:-}"
+       [[ -n "$build_arch" ]] || { echo "Set PIKAFISH_ARCH for this unsupported CPU" >&2; exit 1; } ;;
+esac
+build_arch="${PIKAFISH_ARCH:-$build_arch}"
+if command -v nproc >/dev/null; then build_jobs="$(nproc)"; else build_jobs="$(sysctl -n hw.ncpu)"; fi
+mkdir -p "$FIXTURE_DIR/bin"
+cp "$MODEL" "$SOURCE_DIR/src/pikafish.nnue"
+make -C "$SOURCE_DIR/src" clean
+make -C "$SOURCE_DIR/src" -j"${BUILD_JOBS:-$build_jobs}" build ARCH="$build_arch"
+cp "$SOURCE_DIR/src/pikafish" "$FIXTURE_DIR/bin/pikafish"
+cp "$MODEL" "$FIXTURE_DIR/bin/pikafish.nnue"
+# Record exactly what was built, including the binary hash, for CI artifacts.
+python3 - "$FIXTURE_DIR" "$PIKAFISH_COMMIT" "$PIKAFISH_NNUE_SHA256" "$build_arch" <<'PY'
+import hashlib, json, pathlib, sys
+root, commit, model, arch = sys.argv[1:]
+root = pathlib.Path(root)
+binary = root / "bin/pikafish"
+metadata = dict(commit=commit, nnue_sha256=model, architecture=arch,
+                binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+(root / "reference.json").write_text(json.dumps(metadata, indent=2) + "\n")
+PY
+echo "Reference ready: $FIXTURE_DIR/bin/pikafish"

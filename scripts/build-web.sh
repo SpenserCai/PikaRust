@@ -4,21 +4,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$ROOT_DIR/pikarust-web/dist"
+MODEL_FILE="${PIKARUST_NNUE_FILE:-$ROOT_DIR/models/pikafish.nnue}"
+
+# A runnable bundle must include the selected network and its terms.
+python3 - "$MODEL_FILE" <<'PYMODEL'
+import pathlib
+import sys
+p = pathlib.Path(sys.argv[1])
+if not p.is_file() or p.stat().st_size < 1024:
+    sys.exit(f"Missing NNUE model (or Git LFS pointer): {p}; run git lfs pull first")
+PYMODEL
 
 echo "=== Building PikaRust Web ==="
 
 # Clean
 rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR"
+mkdir -p "$DIST_DIR/models"
+cp "$MODEL_FILE" "$DIST_DIR/models/pikafish.nnue"
+cp "$ROOT_DIR/models/LICENSE-NNUE" "$DIST_DIR/models/LICENSE-NNUE"
+cp "$ROOT_DIR/LICENSE" "$DIST_DIR/LICENSE"
 
 # 1. Build engine
 echo "[1/3] Building pikarust engine..."
-cargo build --release -p pikarust-app --bin pikarust --manifest-path "$ROOT_DIR/Cargo.toml"
+cargo build --locked --release -p pikarust-app --bin pikarust --manifest-path "$ROOT_DIR/Cargo.toml"
 cp "$ROOT_DIR/target/release/pikarust" "$DIST_DIR/pikarust"
 
 # 2. Build bridge server
 echo "[2/3] Building bridge server..."
-cargo build --release -p pikarust-bridge --manifest-path "$ROOT_DIR/Cargo.toml"
+cargo build --locked --release -p pikarust-bridge --manifest-path "$ROOT_DIR/Cargo.toml"
 cp "$ROOT_DIR/target/release/pikarust-bridge" "$DIST_DIR/pikarust-bridge"
 
 # 3. Build frontend

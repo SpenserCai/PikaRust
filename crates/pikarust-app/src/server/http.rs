@@ -4,6 +4,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use pikarust_core::engine::SearchLimits;
+
+use super::wait_for_search;
 use pikarust_core::position::Position;
 use serde::{Deserialize, Serialize};
 
@@ -101,14 +103,13 @@ async fn evaluate_handler(
         ..SearchLimits::default()
     };
 
-    let (engine, search_result) = tokio::task::spawn_blocking(move || {
-        let r = engine.go(&limits).wait();
-        (engine, r)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    Box::pin(state.pool.release(engine)).await;
+    let handle = engine
+        .try_go(&limits)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let search_result = wait_for_search(handle)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    drop(engine);
 
     Ok(Json(EvaluateResponse {
         score: ScoreInfo {
@@ -116,7 +117,7 @@ async fn evaluate_handler(
         },
         depth: search_result.depth,
         nodes: search_result.nodes,
-        pv: vec![search_result.best_move.to_string()],
+        pv: search_result.pv.iter().map(ToString::to_string).collect(),
     }))
 }
 
@@ -131,19 +132,20 @@ async fn bestmove_handler(
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let limits = SearchLimits {
-        depth: req.depth,
+        depth: req
+            .depth
+            .or_else(|| req.movetime.is_none().then_some(default_depth())),
         movetime: req.movetime,
         ..SearchLimits::default()
     };
 
-    let (engine, search_result) = tokio::task::spawn_blocking(move || {
-        let r = engine.go(&limits).wait();
-        (engine, r)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    Box::pin(state.pool.release(engine)).await;
+    let handle = engine
+        .try_go(&limits)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let search_result = wait_for_search(handle)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    drop(engine);
 
     Ok(Json(BestMoveResponse {
         bestmove: search_result.best_move.to_string(),
@@ -179,7 +181,7 @@ async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
     Json(StatusResponse {
         active_sessions: state.session_mgr.session_count(),
         pool_active: state.pool.active_count(),
-        pool_available: state.pool.available_count().await,
+        pool_available: state.pool.available_count(),
     })
 }
 
@@ -198,10 +200,78 @@ impl IntoResponse for AppError {
                 "engine pool exhausted".to_owned(),
             ),
             Self::Pool(PoolError::Engine(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::Pool(PoolError::Initialization(msg)) | Self::Internal(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
         };
 
         let body = serde_json::json!({ "error": message });
         (status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::session::SessionManager;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn state() -> AppState {
+        let pool = crate::server::pool::model_free_pool(1);
+        AppState {
+            session_mgr: Arc::new(SessionManager::new(
+                Arc::clone(&pool),
+                1,
+                Duration::from_secs(60),
+            )),
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_requests_do_not_exhaust_the_pool() {
+        let state = state();
+        for _ in 0..3 {
+            let error = bestmove_handler(
+                State(state.clone()),
+                Json(BestMoveRequest {
+                    fen: "invalid".to_owned(),
+                    depth: Some(1),
+                    movetime: None,
+                }),
+            )
+            .await;
+            assert!(matches!(error, Err(AppError::BadRequest(_))));
+            assert_eq!(state.pool.active_count(), 0);
+        }
+        let result = bestmove_handler(
+            State(state.clone()),
+            Json(BestMoveRequest {
+                fen: Position::start_pos().unwrap().fen(),
+                depth: Some(1),
+                movetime: None,
+            }),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(state.pool.active_count(), 0);
+        drop(state);
+    }
+
+    #[tokio::test]
+    async fn zero_depth_is_a_bad_request_instead_of_unbounded_search() {
+        let state = state();
+        let error = evaluate_handler(
+            State(state.clone()),
+            Json(EvaluateRequest {
+                fen: Position::start_pos().unwrap().fen(),
+                depth: 0,
+            }),
+        )
+        .await;
+        assert!(matches!(error, Err(AppError::BadRequest(_))));
+        assert_eq!(state.pool.active_count(), 0);
+        drop(state);
     }
 }

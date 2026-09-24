@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+
+jobs:
+  frontend:
+    name: Web client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pikarust-web/frontend
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pikarust-web/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  quality:
+    name: Format, lint, and documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Validate workspace and install pinned Rust
+        run: |
+          python3 scripts/check-release.py
+          rustup show
+          rustup component add rustfmt clippy
+      - name: Validate workflow syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
+      - name: Check release safety contracts
+        run: python3 -m unittest discover -s scripts/tests -v
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Lint on current stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          cargo +stable clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo doc --locked --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - run: rustup show
+      - name: Verify actual NNUE weights
+        run: bash scripts/setup-pikafish.sh --verify-model
+      - run: cargo test --locked --workspace --all-targets --features pikarust-app/server
+      - run: cargo test --locked --workspace --doc
+      - name: Scalar implementation
+        run: cargo test --locked -p pikarust-core --no-default-features --features simd-none
+      - name: SIMD safety with release optimizations
+        run: cargo test --locked --release -p pikarust-core --lib nnue::simd
+      - name: Search worker recovery with release optimizations
+        run: cargo test --locked --release -p pikarust-core --lib search::thread::tests::recovered_worker_matches_canonical_initialization
+      - name: Optional features compile
+        run: cargo check --locked --workspace --all-targets --all-features
+
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Check the declared MSRV with the committed dependency graph
+        run: |
+          msrv=$(python3 scripts/check-release.py --field msrv)
+          rustup toolchain install "$msrv" --profile minimal
+          cargo +"$msrv" check --locked --workspace --all-targets --all-features
+
+  alignment:
+    name: Protocol and reference alignment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - run: rustup show
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Build the pinned official reference
+        run: bash scripts/setup-pikafish.sh
+      - name: UCI and cancellation behavior
+        run: bash scripts/run-e2e.sh --suite smoke
+        env:
+          PIKARUST_E2E_REPORT: target/e2e/smoke.json
+      - name: Build HTTP and WebSocket server
+        run: cargo build --locked --release -p pikarust-app --features server --bin pikarust-server
+      - name: HTTP and WebSocket lifecycle with real NNUE
+        run: node scripts/check-server.mjs
+      - name: Exact perft and NNUE alignment, plus search observations
+        run: bash scripts/run-e2e.sh --suite alignment
+        env:
+          PIKARUST_E2E_REPORT: target/e2e/alignment.json
+      - name: Preserve reports, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alignment-${{ github.sha }}
+          path: target/e2e/
+          if-no-files-found: warn
+          retention-days: 30

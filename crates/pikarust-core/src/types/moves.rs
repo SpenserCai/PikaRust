@@ -15,7 +15,7 @@ impl Move {
 
     #[inline]
     pub const fn make(from: Square, to: Square) -> Self {
-        Self((from.raw() as u16) << 7 | to.raw() as u16)
+        Self(((from.raw() as u16) << 7) | to.raw() as u16)
     }
 
     #[inline]

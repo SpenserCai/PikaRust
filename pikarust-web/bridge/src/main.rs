@@ -8,7 +8,12 @@ use axum::{
 };
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -60,75 +65,64 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, engine_path: Arc<Pa
     }
 }
 
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "Tokio select emits private helper types that trigger MSRV Clippy"
+)]
 async fn handle_socket_inner(
     socket: axum::extract::ws::WebSocket,
-    engine_path: &PathBuf,
+    engine_path: &Path,
 ) -> anyhow::Result<()> {
     let mut child = tokio::process::Command::new(engine_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        // Cover every early-return and cancelled connection path.
+        .kill_on_drop(true)
         .spawn()?;
 
-    let mut stdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("engine stdin unavailable"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("engine stdout unavailable"))?;
     let mut reader = BufReader::new(stdout).lines();
 
     stdin.write_all(b"uci\n").await?;
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // Forward lines until uciok
-    while let Some(line) = reader.next_line().await? {
-        let done = line.contains("uciok");
-        ws_tx.send(Message::Text(line.into())).await?;
-        if done {
-            break;
-        }
-    }
-
-    // Spawn task: engine stdout -> websocket
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let forward_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                line = reader.next_line() => {
-                    match line {
-                        Ok(Some(l)) => {
-                            if ws_tx.send(Message::Text(l.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                        _ => break,
+    // Both streams belong to this connection. Engine exit and socket closure
+    // terminate the other direction without leaving a detached forwarding task.
+    loop {
+        tokio::select! {
+            line = reader.next_line() => match line? {
+                Some(line) => ws_tx.send(Message::Text(line.into())).await?,
+                None => break,
+            },
+            message = ws_rx.next() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    stdin.write_all(text.as_bytes()).await?;
+                    if !text.ends_with('\n') {
+                        stdin.write_all(b"\n").await?;
                     }
                 }
-                _ = &mut shutdown_rx => break,
-            }
-        }
-    });
-
-    // Client -> engine stdin
-    while let Some(Ok(msg)) = ws_rx.next().await {
-        match msg {
-            Message::Text(text) => {
-                let mut cmd = text.to_string();
-                if !cmd.ends_with('\n') {
-                    cmd.push('\n');
-                }
-                if stdin.write_all(cmd.as_bytes()).await.is_err() {
-                    break;
-                }
-            }
-            Message::Close(_) => break,
-            _ => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            },
         }
     }
-
-    // Cleanup
-    let _ = stdin.write_all(b"quit\n").await;
+    let _ = stdin.write_all(b"stop\nquit\n").await;
     drop(stdin);
-    let _ = shutdown_tx.send(());
-    let _ = forward_task.await;
-    let _ = child.kill().await;
+    if tokio::time::timeout(Duration::from_secs(2), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
     Ok(())
 }

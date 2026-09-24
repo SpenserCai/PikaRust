@@ -6,6 +6,7 @@ members = [
     "crates/pikarust-app",
     "crates/pikarust-bench",
     "pikarust-web/bridge",
+    "e2e_platform",
 ]
 
 [workspace.package]
@@ -14,10 +15,13 @@ version = "0.1.0"
 license = "MIT"
 authors = ["PikaRust Team"]
 rust-version = "1.85"
+repository = "https://github.com/SpenserCai/PikaRust"
+readme = "README.md"
+publish = false
 
 [workspace.dependencies]
-pikarust-core = { path = "crates/pikarust-core" }
-uci-rs = { path = "crates/uci-rs" }
+pikarust-core = { path = "crates/pikarust-core", version = "0.1.0" }
+uci-rs = { package = "pikarust-uci", path = "crates/uci-rs", version = "0.1.0" }
 
 thiserror = "2.0"
 log = "0.4"
@@ -63,7 +67,6 @@ unimplemented = "deny"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
 
 [profile.release.build-override]

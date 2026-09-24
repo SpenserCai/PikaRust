@@ -109,13 +109,16 @@ impl Piece {
 
     #[inline]
     pub const fn make(color: Color, pt: PieceType) -> Self {
-        Self((color as u8) << 3 | pt as u8)
+        Self(((color as u8) << 3) | pt as u8)
     }
 
     #[inline]
     #[allow(unsafe_code)]
     pub const fn color(self) -> Color {
-        debug_assert!(self.0 != 0, "called color() on Piece::NONE");
+        assert!(
+            self.0 != 0 && self.0 < 16 && self.0 != 8,
+            "invalid piece color"
+        );
         // SAFETY: bit 3 is 0 or 1 for valid pieces.
         unsafe { std::mem::transmute(self.0 >> 3) }
     }
@@ -123,7 +126,7 @@ impl Piece {
     #[inline]
     #[allow(unsafe_code)]
     pub const fn piece_type(self) -> PieceType {
-        debug_assert!(self.0 != 0, "called piece_type() on Piece::NONE");
+        assert!(self.0 < 16 && self.0 & 7 != 0, "invalid piece type");
         // SAFETY: low 3 bits of a valid piece are 1..=7.
         unsafe { std::mem::transmute(self.0 & 7) }
     }
@@ -147,6 +150,7 @@ impl Piece {
 
     #[inline]
     pub const fn from_raw(v: u8) -> Self {
+        assert!(v < 16 && v != 8, "invalid piece encoding");
         Self(v)
     }
 }

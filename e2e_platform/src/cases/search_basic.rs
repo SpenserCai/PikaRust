@@ -31,10 +31,20 @@ impl TestCase for SearchDepthTest {
         uci_io::sync_engine(&mut engine, config.default_timeout)?;
 
         uci_io::set_position(&mut engine, None, &[])?;
-        let (bm, _infos) = uci_io::go_depth(&mut engine, 5, timeout)?;
+        let (bm, infos) = uci_io::go_depth(&mut engine, 5, timeout)?;
 
         let mut state = GameState::new()?;
         state.apply_uci_move(&bm.best_move, "PikaRust")?;
+        if let Some(info) = infos
+            .iter()
+            .rev()
+            .find(|info| info.depth == Some(5) && !info.bounded)
+        {
+            let mut variation = GameState::new()?;
+            for mv in &info.pv {
+                variation.apply_uci_move(mv, "PikaRust")?;
+            }
+        }
 
         engine.quit()?;
 
@@ -94,11 +104,7 @@ impl TestCase for SearchMovetimeTest {
     }
 }
 
-/// Tests early stop during a long search (go movetime + stop).
-///
-/// `PikaRust` currently does not handle the UCI "stop" command during search.
-/// This test documents the known limitation. It sends go movetime 5000 and stop
-/// after 500ms, then checks if the engine responded early.
+/// Stop must interrupt a running search and still return a legal best move.
 pub struct SearchStopTest;
 
 impl TestCase for SearchStopTest {
@@ -108,60 +114,40 @@ impl TestCase for SearchStopTest {
 
     fn run(&self, config: &E2eConfig) -> E2eResult<TestOutcome> {
         let start = Instant::now();
-        let timeout = Duration::from_secs(10);
-
         let mut engine = EngineProcess::spawn(
             "PikaRust",
             &config.pikarust_bin,
             &config.pikarust_cwd,
-            timeout,
+            config.default_timeout,
         )?;
-
         uci_io::uci_handshake(&mut engine, config.default_timeout)?;
         uci_io::set_option(&mut engine, "Threads", "1")?;
         uci_io::sync_engine(&mut engine, config.default_timeout)?;
-
         uci_io::set_position(&mut engine, None, &[])?;
-        engine.send("go movetime 5000")?;
-
-        std::thread::sleep(Duration::from_millis(500));
-
-        engine.send("stop")?;
-
-        let lines = engine.read_until(|line| line.starts_with("bestmove"), timeout)?;
-        let elapsed = start.elapsed();
-
-        let bestmove_line = lines
-            .iter()
-            .find(|l| l.starts_with("bestmove"))
-            .cloned()
-            .unwrap_or_default();
-        let bm_str = bestmove_line.split_whitespace().nth(1).unwrap_or("(none)");
-
-        let stopped_early = elapsed < Duration::from_secs(3);
-
+        uci_io::go_infinite(&mut engine)?;
+        std::thread::sleep(Duration::from_millis(100));
+        // UCI requires readiness replies while the search is still running.
+        uci_io::sync_engine(&mut engine, Duration::from_secs(2))?;
+        let stop_start = Instant::now();
+        let (bestmove, _) = uci_io::stop_and_collect(&mut engine, Duration::from_secs(2))?;
+        let latency = stop_start.elapsed();
+        GameState::new()?.apply_uci_move(&bestmove.best_move, "PikaRust")?;
+        // A stopped engine must remain reusable for the next game.
+        uci_io::new_game(&mut engine)?;
+        uci_io::sync_engine(&mut engine, config.default_timeout)?;
+        uci_io::set_position(&mut engine, None, &[])?;
+        let (next, _) = uci_io::go_depth(&mut engine, 2, config.search_timeout)?;
+        GameState::new()?.apply_uci_move(&next.best_move, "PikaRust")?;
         engine.quit()?;
-
-        if stopped_early {
-            Ok(TestOutcome {
-                name: self.name().to_owned(),
-                passed: true,
-                duration: elapsed,
-                detail: format!(
-                    "bestmove={bm_str}, stopped early in {:.1}s",
-                    elapsed.as_secs_f64()
-                ),
-            })
-        } else {
-            Ok(TestOutcome {
-                name: self.name().to_owned(),
-                passed: true,
-                duration: elapsed,
-                detail: format!(
-                    "bestmove={bm_str}, stop not honored ({:.1}s) — known limitation",
-                    elapsed.as_secs_f64()
-                ),
-            })
-        }
+        Ok(TestOutcome {
+            name: self.name().to_owned(),
+            passed: true,
+            duration: start.elapsed(),
+            detail: format!(
+                "stop latency={}ms; bestmove={}; restart legal",
+                latency.as_millis(),
+                bestmove.best_move
+            ),
+        })
     }
 }

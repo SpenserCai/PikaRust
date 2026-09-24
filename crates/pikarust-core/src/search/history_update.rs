@@ -285,6 +285,23 @@ impl Worker {
         }
     }
 
+    pub(super) fn pick_next_move(
+        &self,
+        picker: &mut super::movepick::MovePicker,
+        ply: i32,
+        continuation_count: usize,
+    ) -> Move {
+        let (continuation, count) = self.build_cont_hist_for_movepicker(ply);
+        let history = super::movepick::MovePickerHistory {
+            main: Some(&self.main_history),
+            low_ply: Some(&self.low_ply_history),
+            capture: Some(&self.capture_history),
+            continuation: &continuation[..count.min(continuation_count)],
+            pawn: Some(&self.pawn_history),
+        };
+        picker.next_move_with_history(&self.root_pos, &history)
+    }
+
     /// Build the contHist array for `MovePicker` from the search stack.
     /// Returns up to 6 references to `PieceToHistory` tables.
     /// Matches C++ `contHist[] = {(ss-1)->continuationHistory, ..., (ss-6)->continuationHistory}`.

@@ -17,7 +17,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 echo "[INFO]  Building pikarust-bench (release)..."
-cargo build --release -p pikarust-bench 2>&1 | tail -3
+cargo build --locked --release -p pikarust-bench
 
 echo "[INFO]  Running bench (49 positions × depth 13)..."
 echo

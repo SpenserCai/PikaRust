@@ -2,6 +2,13 @@
 name = "pikarust-bridge"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish.workspace = true
+description = "Local WebSocket bridge for the PikaRust UCI engine"
 
 [dependencies]
 axum = { workspace = true }

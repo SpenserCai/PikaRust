@@ -1,4 +1,12 @@
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_shuffle_epi32, _mm_storeu_si128,
+    _mm_unpackhi_epi64, _mm256_add_epi16, _mm256_add_epi32, _mm256_adds_epi16,
+    _mm256_castsi256_si128, _mm256_cvtepi8_epi16, _mm256_extracti128_si256, _mm256_loadu_si256,
+    _mm256_max_epi16, _mm256_min_epi16, _mm256_min_epi32, _mm256_mulhi_epi16, _mm256_packus_epi16,
+    _mm256_packus_epi32, _mm256_permute4x64_epi64, _mm256_permutevar8x32_epi32, _mm256_set1_epi16,
+    _mm256_set1_epi32, _mm256_setr_epi32, _mm256_setzero_si256, _mm256_slli_epi16,
+    _mm256_srai_epi32, _mm256_storeu_si256, _mm256_sub_epi16, _mm256_sub_epi32,
+};
 
 use super::SimdOps;
 
@@ -6,7 +14,7 @@ pub struct Avx2;
 
 impl SimdOps for Avx2 {
     fn vec_add_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 16;
         let remainder = chunks * 16;
@@ -30,7 +38,7 @@ impl SimdOps for Avx2 {
     }
 
     fn vec_sub_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 16;
         let remainder = chunks * 16;
@@ -53,6 +61,7 @@ impl SimdOps for Avx2 {
     }
 
     fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
 
@@ -71,11 +80,12 @@ impl SimdOps for Avx2 {
         }
 
         for i in (chunks * 16)..len {
-            acc[i] += i16::from(weights[i]);
+            acc[i] = acc[i].wrapping_add(i16::from(weights[i]));
         }
     }
 
     fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
 
@@ -93,12 +103,12 @@ impl SimdOps for Avx2 {
         }
 
         for i in (chunks * 16)..len {
-            acc[i] -= i16::from(weights[i]);
+            acc[i] = acc[i].wrapping_sub(i16::from(weights[i]));
         }
     }
 
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
         let remainder = chunks * 8;
@@ -121,7 +131,7 @@ impl SimdOps for Avx2 {
     }
 
     fn vec_sub_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
         let remainder = chunks * 8;
@@ -144,9 +154,9 @@ impl SimdOps for Avx2 {
     }
 
     fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]) {
-        debug_assert_eq!(psq_acc.len(), 1024);
-        debug_assert_eq!(threat_acc.len(), 1024);
-        debug_assert!(output.len() >= 512);
+        assert_eq!(psq_acc.len(), 1024);
+        assert_eq!(threat_acc.len(), 1024);
+        assert!(output.len() >= 512);
 
         // SAFETY: Caller guarantees AVX2 is available. All pointer accesses are
         // within the validated slice bounds (512 i16 pairs -> 512 u8 outputs).
@@ -162,12 +172,12 @@ impl SimdOps for Avx2 {
             while j + 16 <= 512 {
                 let p0 = _mm256_loadu_si256(psq_ptr.add(j).cast());
                 let t0 = _mm256_loadu_si256(threat_ptr.add(j).cast());
-                let sum0 = _mm256_add_epi16(p0, t0);
+                let sum0 = _mm256_adds_epi16(p0, t0);
                 let clamped0 = _mm256_min_epi16(_mm256_max_epi16(sum0, zero), max_val);
 
                 let p1 = _mm256_loadu_si256(psq_ptr.add(j + 512).cast());
                 let t1 = _mm256_loadu_si256(threat_ptr.add(j + 512).cast());
-                let sum1 = _mm256_add_epi16(p1, t1);
+                let sum1 = _mm256_adds_epi16(p1, t1);
                 let clamped1 = _mm256_min_epi16(_mm256_max_epi16(sum1, zero), max_val);
 
                 // Multiply and divide by 512: shift left 7, mulhi shifts right 16,
@@ -197,7 +207,15 @@ impl SimdOps for Avx2 {
     }
 
     fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        debug_assert_eq!(shift, 6);
+        assert!(
+            output.len() >= input.len(),
+            "activation output is too short"
+        );
+        assert!(shift < 32, "activation shift must be below 32");
+        if shift != 6 {
+            super::scalar::Scalar::clipped_relu(input, output, shift);
+            return;
+        }
         let len = input.len();
         let chunks = len / 32;
         let remainder = chunks * 32;
@@ -242,6 +260,11 @@ impl SimdOps for Avx2 {
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+        assert!(
+            output.len() >= input.len(),
+            "activation output is too short"
+        );
+        assert!(shift <= 28, "squared activation shift must be at most 28");
         for (i, &x) in input.iter().enumerate() {
             let v = i64::from(x);
             let squared = (v * v) >> (2 * shift + 7);
@@ -257,6 +280,7 @@ impl SimdOps for Avx2 {
         in_dim: usize,
         out_dim: usize,
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, in_dim, out_dim);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         for i in 0..in_dim.min(input.len()) {
@@ -265,7 +289,7 @@ impl SimdOps for Avx2 {
             }
             let in_val = i32::from(input[i]);
             for o in 0..out_dim {
-                output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                output[o] = output[o].wrapping_add(in_val * i32::from(weights[i * out_dim + o]));
             }
         }
     }
@@ -302,8 +326,9 @@ impl SimdOps for Avx2 {
     }
 
     fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
+        assert_eq!(input.len() % 4, 0, "NNZ input must contain complete blocks");
         let chunks = input.len() / 4;
-        debug_assert!(chunks <= super::MAX_NNZ);
+        assert!(chunks <= super::MAX_NNZ);
         let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
@@ -327,6 +352,8 @@ impl SimdOps for Avx2 {
         out_dim: usize,
         nnz_indices: &[usize],
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, input.len(), out_dim);
+        super::validate_sparse_indices(input.len(), nnz_indices);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         for &block_idx in nnz_indices {
@@ -341,7 +368,8 @@ impl SimdOps for Avx2 {
                 }
                 let in_val = i32::from(input[idx]);
                 for o in 0..out_dim {
-                    output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                    output[o] =
+                        output[o].wrapping_add(in_val * i32::from(weights[idx * out_dim + o]));
                 }
             }
         }

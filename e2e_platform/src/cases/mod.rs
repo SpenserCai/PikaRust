@@ -1,8 +1,9 @@
+pub mod alignment;
 pub mod cross_engine;
-pub mod eval_equivalence;
 pub mod search_basic;
 pub mod self_play;
 pub mod strength_gauntlet;
+pub mod strength_regression;
 pub mod uci_compliance;
 
 use std::time::{Duration, Instant};
@@ -63,9 +64,13 @@ pub fn all_cases() -> Vec<Box<dyn TestCase>> {
         Box::new(search_basic::SearchDepthTest),
         Box::new(search_basic::SearchMovetimeTest),
         Box::new(search_basic::SearchStopTest),
-        Box::new(eval_equivalence::EvalEquivalenceTest),
+        Box::new(alignment::PerftEquivalence),
+        Box::new(alignment::NnueEquivalence),
+        Box::new(alignment::SearchComparison),
+        Box::new(alignment::SearchRegression),
         Box::new(self_play::SelfPlayTest),
         Box::new(cross_engine::CrossEngineTest),
+        Box::new(strength_regression::StrengthRegression),
         Box::new(strength_gauntlet::StrengthGauntletSelf),
         Box::new(strength_gauntlet::StrengthGauntlet),
         Box::new(strength_gauntlet::StrengthGauntletRef),

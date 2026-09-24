@@ -15,6 +15,8 @@ struct PositionSnapshot {
     side_to_move: Color,
     game_ply: u16,
     state: StateInfo,
+    id_board: [i32; Square::NUM],
+    mid_encoding_val: [u64; Color::NUM],
 }
 
 impl Position {
@@ -27,6 +29,8 @@ impl Position {
             side_to_move: self.side_to_move,
             game_ply: self.game_ply,
             state: self.state.clone(),
+            id_board: self.id_board,
+            mid_encoding_val: self.mid_encoding_val,
         }
     }
 
@@ -39,6 +43,8 @@ impl Position {
         self.side_to_move = snap.side_to_move;
         self.game_ply = snap.game_ply;
         self.state = snap.state;
+        self.id_board = snap.id_board;
+        self.mid_encoding_val = snap.mid_encoding_val;
     }
 
     fn attacks_bb_by_type(&self, pt: PieceType, sq: Square) -> Bitboard {
@@ -231,6 +237,10 @@ impl Position {
         let from = m.from_sq();
         let to = m.to_sq();
 
+        // Chase masks identify pieces, not squares. Follow the moving piece
+        // backwards just as the reference chase-only undo operation does.
+        self.id_board[from] = self.id_board[to];
+        self.id_board[to] = 0;
         self.move_piece(to, from);
 
         if captured != Piece::NONE {
@@ -242,5 +252,66 @@ impl Position {
             self.state = self.state_stack[*stack_cursor].clone();
         }
         self.game_ply = self.game_ply.saturating_sub(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moving_targets_keep_their_identity_in_repetition_adjudication() {
+        let mut pos =
+            Position::from_fen("2bak1b1r/4a4/2n4cn/p6C1/4pN3/P2N4R/4P1P1P/3CB4/4A2r1/c1BAKR3 w")
+                .expect("benchmark position");
+        for (from, to) in [
+            (Square::SQ_D2, Square::SQ_C2),
+            (Square::SQ_C9, Square::SQ_E7),
+            (Square::SQ_C2, Square::SQ_C1),
+            (Square::SQ_H1, Square::SQ_H2),
+            (Square::SQ_C1, Square::SQ_C2),
+            (Square::SQ_H2, Square::SQ_H1),
+        ] {
+            let movement = Move::make(from, to);
+            assert!(pos.pseudo_legal(movement) && pos.is_legal(movement));
+            pos.do_move(movement, pos.gives_check(movement));
+        }
+        // Pikafish 76239d0b: rule_judge(result, 6) on this exact move
+        // history returns false with result = -31994 (a twofold chase loss).
+        assert_eq!(
+            pos.rule_judge(6),
+            super::super::rule_judge::RuleJudgeResult::TwoFold(mated_in(6)),
+        );
+    }
+
+    #[test]
+    fn chase_history_rewind_preserves_piece_identity() {
+        let mut pos = Position::start_pos().expect("start position");
+        let movement = Move::make(Square::SQ_B0, Square::SQ_C2);
+        pos.do_move(movement, pos.gives_check(movement));
+        pos.id_board[Square::SQ_C2] = 7;
+        let mut cursor = pos.state_stack.len();
+        pos.undo_move_light(&mut cursor);
+        assert_eq!(pos.id_board[Square::SQ_B0], 7);
+        assert_eq!(pos.id_board[Square::SQ_C2], 0);
+        assert_eq!(pos.piece_on(Square::SQ_B0), Piece::W_KNIGHT);
+    }
+
+    #[test]
+    fn chase_probe_restores_nnue_feature_state() {
+        let mut pos = Position::start_pos().expect("start position");
+        let movement = Move::make(Square::SQ_B0, Square::SQ_C2);
+        pos.do_move(movement, pos.gives_check(movement));
+        let fen = pos.fen();
+        let key = pos.key();
+        let encodings = pos.mid_encoding_val;
+        let ids = pos.id_board;
+        // A chase query rewinds history and must restore every piece-derived
+        // field even when it stops before reaching the beginning of a cycle.
+        pos.detect_chases(1, 1);
+        assert_eq!(pos.fen(), fen);
+        assert_eq!(pos.key(), key);
+        assert_eq!(pos.mid_encoding_val, encodings);
+        assert_eq!(pos.id_board, ids);
     }
 }

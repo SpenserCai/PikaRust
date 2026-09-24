@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::types::Piece;
 
-    fn startpos_counts() -> [u8; 16] {
+    const fn startpos_counts() -> [u8; 16] {
         let mut counts = [0u8; 16];
         counts[Piece::W_ROOK.index()] = 2;
         counts[Piece::W_KNIGHT.index()] = 2;
