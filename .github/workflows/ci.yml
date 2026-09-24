@@ -77,6 +77,8 @@ jobs:
       - name: Check validation and release tooling contracts
         run: python3 -m unittest discover -s scripts/tests -v
       - run: cargo fmt --all -- --check
+      - name: Check portable AVX2 release code generation
+        run: python3 scripts/check-avx2-codegen.py
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Lint on current stable Rust
         run: |

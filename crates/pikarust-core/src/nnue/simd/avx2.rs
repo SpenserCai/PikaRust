@@ -3,6 +3,7 @@
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
+// 2026-09-24: compile kernels with function-local AVX2 for portable runtime dispatch.
 
 use std::arch::x86_64::{
     _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_shuffle_epi32, _mm_storeu_si128,
@@ -16,10 +17,17 @@ use std::arch::x86_64::{
 
 use super::SimdOps;
 
-pub struct Avx2;
+/// Internal kernels; only the CPU-checked `Dispatch` may call these operations.
+///
+/// Unlike the safe `SimdOps` trait, these methods express their CPU precondition
+/// as `unsafe`. Every kernel validates its slice shapes before accessing memory.
+/// Function-local features allow intrinsic inlining without raising the binary's
+/// baseline CPU requirement.
+pub(super) struct Avx2;
 
-impl SimdOps for Avx2 {
-    fn vec_add_i16(a: &mut [i16], b: &[i16]) {
+impl Avx2 {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_add_i16(a: &mut [i16], b: &[i16]) {
         assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 16;
@@ -43,7 +51,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn vec_sub_i16(a: &mut [i16], b: &[i16]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_sub_i16(a: &mut [i16], b: &[i16]) {
         assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 16;
@@ -66,7 +75,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
         assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
@@ -90,7 +100,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
         assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
@@ -113,7 +124,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn vec_add_i32(a: &mut [i32], b: &[i32]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_add_i32(a: &mut [i32], b: &[i32]) {
         assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
@@ -136,7 +148,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn vec_sub_i32(a: &mut [i32], b: &[i32]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vec_sub_i32(a: &mut [i32], b: &[i32]) {
         assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
@@ -159,7 +172,12 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn transform_features(
+        psq_acc: &[i16],
+        threat_acc: &[i16],
+        output: &mut [u8],
+    ) {
         assert_eq!(psq_acc.len(), 1024);
         assert_eq!(threat_acc.len(), 1024);
         assert!(output.len() >= 512);
@@ -212,7 +230,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
         assert!(
             output.len() >= input.len(),
             "activation output is too short"
@@ -265,7 +284,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
         assert!(
             output.len() >= input.len(),
             "activation output is too short"
@@ -278,7 +298,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn affine_propagate(
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn affine_propagate(
         input: &[u8],
         weights: &[i8],
         biases: &[i32],
@@ -300,7 +321,8 @@ impl SimdOps for Avx2 {
         }
     }
 
-    fn horizontal_sum_i32(data: &[i32]) -> i32 {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn horizontal_sum_i32(data: &[i32]) -> i32 {
         let len = data.len();
         let chunks = len / 8;
         let remainder = chunks * 8;
@@ -331,7 +353,11 @@ impl SimdOps for Avx2 {
         sum
     }
 
-    fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn find_nnz(
+        input: &[u8],
+        nnz_indices: &mut [usize; super::MAX_NNZ],
+    ) -> usize {
         assert_eq!(input.len() % 4, 0, "NNZ input must contain complete blocks");
         let chunks = input.len() / 4;
         assert!(chunks <= super::MAX_NNZ);
@@ -350,7 +376,8 @@ impl SimdOps for Avx2 {
         count
     }
 
-    fn affine_propagate_sparse(
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn affine_propagate_sparse(
         input: &[u8],
         weights: &[i8],
         biases: &[i32],

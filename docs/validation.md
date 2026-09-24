@@ -199,6 +199,20 @@ match the scalar implementation on supported input ranges and run on a CPU that
 actually supports the backend. An all-features build is a compilation gate, not
 a substitute for exercising each backend separately.
 
+AVX2 kernels use function-local target features behind CPU-checked dispatch.
+Normal release builds remain portable; a global `target-cpu=native` or `+avx2`
+flag is not required. On x86-64 Linux, check the optimized portable assembly with:
+
+```sh
+python3 scripts/check-avx2-codegen.py
+```
+
+This gate builds a fresh release engine with baseline `x86-64` compiler flags,
+requires vector instructions to be present, and rejects calls or tail calls to
+individual AVX2 intrinsic wrappers. Generated assembly remains under `target/`.
+The check catches code-generation regressions that numerical tests alone cannot
+detect; it does not replace scalar/SIMD comparisons or measured benchmarks.
+
 ## Browser functional verification
 
 The React frontend uses `pikarust-bridge`, which launches the native UCI engine.
