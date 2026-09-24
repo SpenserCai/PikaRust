@@ -68,6 +68,7 @@ pub fn all_cases() -> Vec<Box<dyn TestCase>> {
         Box::new(alignment::NnueEquivalence),
         Box::new(alignment::SearchComparison),
         Box::new(alignment::SearchRegression),
+        Box::new(alignment::SearchHistoryEquivalence),
         Box::new(self_play::SelfPlayTest),
         Box::new(cross_engine::CrossEngineTest),
         Box::new(strength_regression::StrengthRegression),

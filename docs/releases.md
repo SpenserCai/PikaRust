@@ -82,7 +82,8 @@ share the release version while retaining ecosystem-specific package validation.
 ## Ongoing checks
 
 `CI` checks formatting, lints, documentation, the declared MSRV, native platform
-tests, and pinned-reference comparisons. `Strength experiments` runs separately
+tests, pinned-reference comparisons, and the production browser application
+with its native engine. `Strength experiments` runs separately
 on a weekly schedule or by manual dispatch. It preserves experiment provenance
 and results; a small successful gauntlet is not a release claim of equal Elo.
 Dependency updates are proposed through Dependabot and pass the same PR gates.

@@ -7,6 +7,8 @@ use std::time::Duration;
 use log::{debug, error, info};
 
 use pikarust_core::engine::{Engine, SearchHandle, SearchLimits};
+use pikarust_core::position::rule_judge::RuleJudgeResult;
+use pikarust_core::position::{GenType, Position, generate};
 use pikarust_core::types::is_decisive;
 use uci_rs::{GoParams, UciCommand, parse_command};
 
@@ -102,9 +104,7 @@ fn main() {
                 UciCommand::Debug(on) => {
                     debug!("debug mode: {on}");
                 }
-                UciCommand::D => {
-                    send(&format!("{}", engine.position()));
-                }
+                UciCommand::D => handle_display(&engine),
                 UciCommand::Eval => {
                     stop_active(&mut active);
                     handle_eval(&engine);
@@ -309,6 +309,34 @@ fn handle_position(engine: &mut Engine, fen: Option<&str>, moves: &[String]) {
     }
 }
 
+fn handle_display(engine: &Engine) {
+    send(&format!("{}", engine.position()));
+    send(&format!("Game status: {}", game_status(engine.position())));
+}
+
+/// Adjudicate the played position from the side to move's perspective.
+fn game_status(position: &Position) -> &'static str {
+    // Repetition adjudication temporarily rewinds history. Keep diagnostics
+    // independent from the live engine position, including its NNUE state.
+    let mut position = position.clone();
+    // At the game root, ply zero excludes search-only twofold adjudication.
+    // Preserve the rule judge's precedence over the no-legal-move fallback.
+    match position.rule_judge(0) {
+        RuleJudgeResult::Definitive(value) => match value.cmp(&0) {
+            std::cmp::Ordering::Greater => "win",
+            std::cmp::Ordering::Equal => "draw",
+            std::cmp::Ordering::Less => "loss",
+        },
+        RuleJudgeResult::None | RuleJudgeResult::TwoFold(_) => {
+            if generate(&position, GenType::Legal).is_empty() {
+                "loss"
+            } else {
+                "ongoing"
+            }
+        }
+    }
+}
+
 fn handle_set_option(engine: &mut Engine, name: &str, value: Option<&str>) {
     let value = value.unwrap_or("");
     if let Err(e) = engine.set_option(name, value) {
@@ -357,6 +385,85 @@ fn send(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pikarust_core::types::{Move, Square};
+
+    fn play(position: &mut Position, from: Square, to: Square) {
+        let movement = Move::make(from, to);
+        assert!(position.is_legal_move(movement));
+        position.do_move(movement, position.gives_check(movement));
+    }
+
+    #[test]
+    fn game_status_reports_played_threefold_without_mutating_history() {
+        let mut position = Position::start_pos().unwrap();
+        assert_eq!(game_status(&position), "ongoing");
+        let cycle = [
+            (Square::SQ_A0, Square::SQ_A1),
+            (Square::SQ_A9, Square::SQ_A8),
+            (Square::SQ_A1, Square::SQ_A0),
+            (Square::SQ_A8, Square::SQ_A9),
+        ];
+        for (from, to) in cycle {
+            play(&mut position, from, to);
+        }
+        assert_eq!(game_status(&position), "ongoing");
+        for (from, to) in cycle {
+            play(&mut position, from, to);
+        }
+        let fen = position.fen();
+        let key = position.key();
+        assert_eq!(game_status(&position), "draw");
+        assert_eq!(game_status(&position), "draw");
+        assert_eq!(position.fen(), fen);
+        assert_eq!(position.key(), key);
+        assert_eq!(position.rule_judge(0), RuleJudgeResult::Definitive(0));
+    }
+
+    #[test]
+    fn game_status_reports_rule60_and_material_draws() {
+        let at_limit = START_FEN.replace("0 1", "120 1");
+        for fen in [at_limit.as_str(), "3k5/9/9/9/9/9/9/9/9/4K4 w - - 0 1"] {
+            let position = Position::from_fen(fen).unwrap();
+            assert_eq!(game_status(&position), "draw");
+            assert_eq!(position.fen(), fen);
+        }
+    }
+
+    #[test]
+    fn game_status_reports_mate_and_stalemate_as_losses() {
+        for (fen, in_check) in [
+            ("3k5/9/9/9/9/9/9/4r4/9/3rK4 w - - 0 1", true),
+            ("3k5/9/9/9/9/9/9/9/3r1r3/4K4 w - - 0 1", false),
+            ("3k5/9/9/9/9/9/9/4r4/9/3rK4 w - - 120 1", true),
+        ] {
+            let position = Position::from_fen(fen).unwrap();
+            assert_eq!(position.checkers().is_not_empty(), in_check);
+            assert!(generate(&position, GenType::Legal).is_empty());
+            assert_eq!(game_status(&position), "loss");
+            assert_eq!(position.fen(), fen);
+        }
+    }
+
+    #[test]
+    fn game_status_perpetual_check_uses_side_to_move_perspective() {
+        let mut position = Position::from_fen("3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1").unwrap();
+        let cycle = [
+            (Square::SQ_D9, Square::SQ_E9),
+            (Square::SQ_D8, Square::SQ_E8),
+            (Square::SQ_E9, Square::SQ_D9),
+            (Square::SQ_E8, Square::SQ_D8),
+        ];
+        for (from, to) in cycle {
+            play(&mut position, from, to);
+        }
+        assert_eq!(game_status(&position), "ongoing");
+        for (from, to) in cycle {
+            play(&mut position, from, to);
+        }
+        assert_eq!(game_status(&position), "win");
+        play(&mut position, Square::SQ_D9, Square::SQ_E9);
+        assert_eq!(game_status(&position), "loss");
+    }
 
     #[test]
     fn rejects_overflow_and_unbounded_zero_limits() {

@@ -48,8 +48,11 @@ validation.
 | NNUE reference comparison | Exact raw integer output on the comparison positions | Identity of the entire search tree |
 | Fixed-node search diagnostics | Legal output, repeatability, and reported fixed-budget differences | Full upstream search alignment |
 | Fixed-depth search reference comparison | Exact official best moves, scores, node counts, and complete PVs at depths 5, 8, and 13 | Identity at every depth or position |
+| Played-history reference comparison | Exact depth-8 search output after real moves, plus expected native game status | Every repetition or chase history |
 | Candidate search snapshot | Reviewed fixed-depth moves, scores, node counts, and complete legal PVs | Independent correctness of the snapshot itself |
 | UCI process tests | Handshake, limits, cancellation, and output framing | Hosting reliability under arbitrary load |
+| HTTP/WebSocket process tests | Server requests, sessions, search results, and cancellation | Browser rendering or board interaction |
+| Browser functional checks | Board interaction through the bridge and native engine | Full rule coverage or hosted-service reliability |
 | Match tests | Complete legal games and recorded results | Statistically established Elo from a small sample |
 | Benchmarks | Node counts and throughput for the recorded configuration | Correctness or equal playing strength |
 
@@ -119,9 +122,37 @@ score, node count, and complete PV must match exactly. It also checks candidate
 output against the reviewed `e2e_platform/fixtures/search-baseline.json`
 snapshot, including the complete PV and its legality. Both engines' PVs are
 replayed move by move to verify legality before comparing the recorded output.
+Each position and depth starts with `ucinewgame`, which resets the transposition
+table and search histories. The current corpus has 52 positions, producing 156
+independent searches per engine. This differs from the continuous benchmark
+sequence described below; their total node counts are not interchangeable.
 
-The snapshot provides a separate regression gate; its output alone does not
-establish upstream correctness. An intentional search change can generate a
+The separate `search_history_equivalence` case replays the initial FEN and
+complete UCI move sequence from
+[`e2e_platform/fixtures/search-history.tsv`](../e2e_platform/fixtures/search-history.tsv).
+Its seven histories include opening play, twofold and threefold repetition,
+perpetual check, and a moving chase target. After one reset before each history,
+both engines search the resulting position at depth 8, one thread, and 16 MiB
+hash. Best move, score type and value, node count, and complete legal PV must
+match the pinned official engine exactly.
+
+The case also checks the candidate's `d` game-status response against the
+reviewed fixture expectation. This status check is separate from search parity:
+the official engine can still search an already adjudicated root, so its search
+score is not a game-result oracle. The case belongs to the alignment suite and
+can be selected directly:
+
+```sh
+scripts/run-e2e.sh --filter search_history_equivalence
+```
+
+These histories complement the 156 FEN-based snapshot searches. Replacing a
+played history with only its final FEN discards repetition context and cannot
+detect state lost while copying a position into search workers. Reports retain
+the initial FEN, moves, expected and actual status, and both search results.
+
+The FEN-based snapshot provides a separate regression gate; its output alone
+does not establish upstream correctness. An intentional search change can generate a
 proposed replacement in an ignored output directory:
 
 ```sh
@@ -150,9 +181,8 @@ When a search differs, localize the earliest divergence in this order:
 
 Add an independently justified expected result for the first incorrect state.
 Do not fix a search discrepancy by raising a cp tolerance or replacing fixtures
-with output from the same unverified engine. The former broad score-tolerance
-comparison was only a catastrophic-regression smoke check and cannot establish
-algorithm identity.
+with output from the same unverified engine. Score proximity alone cannot
+establish algorithm identity.
 
 NNUE changes also require incremental-versus-refresh checks after captures,
 king moves, feature-bucket changes, and make/unmake sequences. SIMD kernels must
@@ -160,7 +190,113 @@ match the scalar implementation on supported input ranges and run on a CPU that
 actually supports the backend. An all-features build is a compilation gate, not
 a substitute for exercising each backend separately.
 
-## Playing strength and performance
+## Browser functional verification
+
+The React frontend uses `pikarust-bridge`, which launches the native UCI engine.
+It does not use the separate `pikarust-server` HTTP API. Frontend lint/build and
+the HTTP/WebSocket server smoke test therefore cover different paths from a
+browser session.
+
+Build and start the complete local application as shown in the
+[README](../README.md#local-web-interface), or run the browser acceptance script
+with Node.js 22 or newer and Playwright Chromium:
+
+```sh
+scripts/build-web.sh
+(cd pikarust-web/frontend && npx --no-install playwright install --with-deps chromium)
+node scripts/check-web.mjs
+```
+
+The build installs the frontend's locked dependencies. The acceptance script
+starts the production bundle's bridge and native engine on a random local port,
+using its bundled NNUE model; no separately running service is required. Reports,
+WebSocket frames, bridge logs, and screenshots go to `target/e2e/web/`. Set
+`PIKARUST_WEB_REPORT_DIR` to retain them elsewhere. CI preserves these outputs as
+artifacts, including failures.
+
+Retain `report.json` with `protocol.jsonl`, `bridge.log`, `provenance.json`, and
+`board.png` when reporting a failure. The provenance records the revision and
+binary, model, and frontend identifiers used by the test.
+
+The browser acceptance scope includes the following interactions:
+
+1. The page connects, displays the starting board, and has no browser console
+   errors or failed application requests.
+2. As red, make a legal move and wait for the engine reply. Check board state,
+   move history, and analysis together. As black, confirm the engine moves first.
+3. Switch between depth and time limits, including switching modes without
+   changing the newly displayed default value. Flip the board and verify that
+   piece selection and destination clicks still correspond to the right squares.
+4. Start a new game and undo moves, both after a reply and during a search.
+   A result from a cancelled search must not change the replacement position.
+5. Reload or reconnect and confirm that connection state and game controls remain
+   usable, without duplicated move events.
+
+Record the tested revision, browser, selected model, and checks performed in the
+PR or retained test artifacts. A successful frontend build alone is not a browser
+functional test.
+
+## Standard benchmark
+
+The standard benchmark searches the 49 official benchmark positions in order,
+at depth 13 with one thread and 16 MiB hash. It resets the engine once before the
+sequence, then retains the transposition table and search histories between
+positions. This tests a different state lifetime from the E2E oracle, which
+resets before each position and depth.
+
+| Procedure | Positions and depths | Search state |
+| --- | --- | --- |
+| Standard benchmark | 49 official positions, depth 13 | One reset before the complete sequence |
+| `search_regression` E2E | 52 fixture positions, depths 5, 8, and 13 | Reset before each of the 156 searches |
+
+```sh
+# Build and run the candidate benchmark.
+scripts/run-bench.sh
+
+# Build both engines and compare the standard sequence over repeated runs.
+scripts/run-bench.sh compare
+
+# Explicit experiment settings and retained output directory.
+scripts/run-bench.sh compare --rounds 3 --depth 13 --hash 16 \
+  --output target/bench/review
+```
+
+Comparison mode fixes the thread count to one. By default it runs three rounds,
+alternating which engine runs first, and starts a fresh process for each engine
+and round. It requires exact per-position node counts, best moves, score types
+and values, and complete PVs. Missing prerequisites or any mismatch fail the
+command.
+
+Both modes verify the pinned model before use. `PIKARUST_NNUE_MODEL` selects a
+different path to that same model; a missing model or digest mismatch fails
+instead of falling back to material evaluation.
+
+The script matches the reference build architecture to the candidate's actual
+SIMD backend: AVX2 uses `x86-64-avx2`, and NEON uses `armv8`. An explicitly selected
+`--reference-arch` must match that backend. Use `--cpu N` to select CPU affinity
+on Linux with `taskset`, and record the host configuration alongside the results.
+Performance comparison fails on a backend without a matching reference build;
+it does not silently compare different instruction sets.
+Matching the NNUE instruction set does not make Rust and C++ compilers or their
+optimization flags identical. Inspect the retained build commands and logs when
+interpreting timing differences.
+
+Outputs go to the chosen directory, or a timestamped directory under
+`target/bench`. They include `report.json`, per-engine/per-round logs, build logs,
+source-diff evidence, and frozen copies of the executables and model. The summary
+reports median elapsed time and NPS, plus the candidate/reference NPS ratio.
+Keep the report and its supporting files together when reviewing a performance
+claim; they are generated artifacts and do not belong in tracked documentation.
+An explicit output directory must be new; the script refuses to overwrite a
+previous experiment.
+
+Run benchmarks on equivalent release builds on the same otherwise idle machine.
+Record elapsed time, node count, NPS, and the active evaluation backend. A faster
+result with a changed search tree needs separate algorithm and strength
+analysis. Exact benchmark output only establishes agreement for the stated
+sequence and configuration; it does not establish equivalent playing strength.
+
+## Playing strength
 
 Run the candidate-versus-baseline experiment with a separately built previous
 PikaRust executable and a working directory containing the same pinned model:
@@ -210,11 +346,6 @@ set, and every game result. Swap colors for each opening. Compare the candidate
 to a fixed previous PikaRust build to assess regression; compare separately to
 Pikafish to characterize the remaining gap. Use a sufficient sample and a
 predeclared statistical acceptance criterion, with paired-game uncertainty.
-
-For performance, run `scripts/run-bench.sh` on equivalent release builds on the
-same otherwise idle machine. Report elapsed time, node count, NPS, and the active
-evaluation backend. A faster result with a changed search tree needs separate
-algorithm and strength analysis.
 
 Full search identity, broad rule coverage, sustained multithread behavior, and
 statistically supported playing-strength parity remain distinct validation

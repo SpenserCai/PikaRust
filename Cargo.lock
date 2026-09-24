@@ -940,6 +940,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "pikarust-core",
+ "pikarust-uci",
 ]
 
 [[package]]

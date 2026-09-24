@@ -460,7 +460,7 @@ impl Clone for Position {
             game_ply: self.game_ply,
             state: self.state.clone(),
             state_stack: self.state_stack.clone(),
-            bloom_filter: BloomFilter::new(),
+            bloom_filter: self.bloom_filter.clone(),
             id_board: self.id_board,
             mid_encoding_val: self.mid_encoding_val,
         }
@@ -487,5 +487,59 @@ impl fmt::Display for Position {
         }
         writeln!(f, "   a   b   c   d   e   f   g   h   i")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::position::rule_judge::RuleJudgeResult;
+
+    #[test]
+    fn clone_preserves_repetition_keys_and_independent_history() {
+        let mut position = Position::start_pos().unwrap();
+        let cycle = [
+            Move::make(Square::SQ_A0, Square::SQ_A1),
+            Move::make(Square::SQ_A9, Square::SQ_A8),
+            Move::make(Square::SQ_A1, Square::SQ_A0),
+            Move::make(Square::SQ_A8, Square::SQ_A9),
+        ];
+        for movement in cycle.into_iter().cycle().take(8) {
+            assert!(position.is_legal_move(movement));
+            position.do_move(movement, position.gives_check(movement));
+        }
+        let fen = position.fen();
+        let key = position.key();
+        let repetition_count = position.bloom_filter.count(position.state.key);
+        assert_eq!(repetition_count, 2);
+        assert_eq!(position.rule_judge(0), RuleJudgeResult::Definitive(0));
+
+        // Pikafish 76239d0b position.h: Position::set(const Position&, ...)
+        // copies both the played state and Bloom filter into each worker.
+        let mut cloned = position.clone();
+        assert_eq!(cloned.key(), key);
+        assert_eq!(cloned.rule_judge(0), RuleJudgeResult::Definitive(0));
+        assert_eq!(
+            cloned.bloom_filter.count(position.state.key),
+            repetition_count
+        );
+
+        let movement = cycle[0];
+        cloned.do_move(movement, cloned.gives_check(movement));
+        assert_eq!(
+            cloned.bloom_filter.count(position.state.key),
+            repetition_count + 1
+        );
+        assert_eq!(
+            position.bloom_filter.count(position.state.key),
+            repetition_count
+        );
+        cloned.undo_move(movement);
+        assert_eq!(cloned.fen(), fen);
+        assert_eq!(cloned.key(), key);
+        assert_eq!(cloned.rule_judge(0), RuleJudgeResult::Definitive(0));
+        assert_eq!(cloned.state_stack.len(), position.state_stack.len());
+        assert_eq!(position.fen(), fen);
+        assert_eq!(position.key(), key);
     }
 }

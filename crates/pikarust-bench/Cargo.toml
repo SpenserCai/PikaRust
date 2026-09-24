@@ -12,6 +12,7 @@ publish.workspace = true
 
 [dependencies]
 pikarust-core = { workspace = true }
+uci-rs = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

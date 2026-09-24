@@ -33,6 +33,7 @@ pub fn run_all(config: &E2eConfig, filter: Option<&str>, suite: &str) -> RunRepo
                         | "nnue_equivalence"
                         | "search_comparison"
                         | "search_regression"
+                        | "search_history_equivalence"
                 ),
                 "all" => !case.is_slow(),
                 _ => false,

@@ -378,3 +378,202 @@ impl TestCase for SearchRegression {
         }).to_string() })
     }
 }
+
+struct HistoryPosition {
+    name: &'static str,
+    fen: &'static str,
+    moves: Vec<String>,
+    root_status: &'static str,
+}
+
+fn history_positions() -> E2eResult<Vec<HistoryPosition>> {
+    let mut positions = Vec::new();
+    for line in include_str!("../../fixtures/search-history.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+    {
+        let fields: Vec<_> = line.split('\t').collect();
+        let [name, fen, moves, root_status] = fields.as_slice() else {
+            return Err(E2eError::Preflight(
+                "history fixture requires name, FEN, moves and root status".to_owned(),
+            ));
+        };
+        if name.is_empty()
+            || moves.is_empty()
+            || !matches!(*root_status, "ongoing" | "draw" | "win" | "loss")
+            || positions
+                .iter()
+                .any(|pos: &HistoryPosition| pos.name == *name)
+        {
+            return Err(E2eError::Preflight(format!(
+                "invalid or duplicate history fixture: {name}"
+            )));
+        }
+        positions.push(HistoryPosition {
+            name,
+            fen,
+            moves: moves.split_whitespace().map(str::to_owned).collect(),
+            root_status,
+        });
+    }
+    if positions.is_empty() {
+        return Err(E2eError::Preflight("empty history corpus".to_owned()));
+    }
+    Ok(positions)
+}
+
+fn played_position(fixture: &HistoryPosition) -> E2eResult<GameState> {
+    let mut state = GameState::from_fen(fixture.fen)?;
+    for mv in &fixture.moves {
+        state.apply_uci_move(mv, "history fixture")?;
+    }
+    Ok(state)
+}
+
+fn set_history(
+    engine: &mut EngineProcess,
+    fixture: &HistoryPosition,
+    config: &E2eConfig,
+) -> E2eResult<()> {
+    uci_io::new_game(engine)?;
+    uci_io::sync_engine(engine, config.default_timeout)?;
+    uci_io::set_position(engine, Some(fixture.fen), &fixture.moves)
+}
+
+fn root_status(engine: &mut EngineProcess, config: &E2eConfig) -> E2eResult<String> {
+    engine.send("d")?;
+    engine.send("isready")?;
+    let lines = engine.read_until(|line| line.trim() == "readyok", config.default_timeout)?;
+    let statuses: Vec<_> = lines
+        .iter()
+        .filter_map(|line| line.strip_prefix("Game status: "))
+        .collect();
+    match statuses.as_slice() {
+        [status] if matches!(*status, "ongoing" | "draw" | "win" | "loss") => {
+            Ok((*status).to_owned())
+        }
+        _ => Err(protocol(
+            engine,
+            "one explicit Game status diagnostic",
+            &lines,
+        )),
+    }
+}
+
+fn history_search_equal(left: &SearchObservation, right: &SearchObservation) -> bool {
+    left.bestmove == right.bestmove
+        && left.final_info.depth == right.final_info.depth
+        && left.final_info.nodes == right.final_info.nodes
+        && left.final_info.score_cp == right.final_info.score_cp
+        && left.final_info.score_mate == right.final_info.score_mate
+        && left.final_info.pv == right.final_info.pv
+}
+
+/// Real played histories must survive the engine-to-search-worker copy. Unlike
+/// FEN-only snapshots, these expose repetition-filter loss at that boundary.
+pub struct SearchHistoryEquivalence;
+impl TestCase for SearchHistoryEquivalence {
+    fn name(&self) -> &'static str {
+        "search_history_equivalence"
+    }
+
+    fn requires_pikafish(&self) -> bool {
+        true
+    }
+
+    fn run(&self, config: &E2eConfig) -> E2eResult<TestOutcome> {
+        const DEPTH: u32 = 8;
+        let start = Instant::now();
+        let fixtures = history_positions()?;
+        let (mut candidate, mut reference) = engines(config)?;
+        let mut passed = true;
+        let mut observations = Vec::new();
+        for fixture in fixtures {
+            let result = (|| -> E2eResult<_> {
+                // Validate the complete supplied history, then validate each
+                // engine's best move and PV from the resulting board.
+                let final_fen = played_position(&fixture)?.fen();
+                set_history(&mut candidate, &fixture, config)?;
+                set_history(&mut reference, &fixture, config)?;
+                let status = root_status(&mut candidate, config)?;
+                let (bestmove, infos) =
+                    uci_io::go_depth(&mut candidate, DEPTH, config.search_timeout)?;
+                let actual = observation(&candidate, &final_fen, bestmove, infos)?;
+                let (bestmove, infos) =
+                    uci_io::go_depth(&mut reference, DEPTH, config.search_timeout)?;
+                let expected = observation(&reference, &final_fen, bestmove, infos)?;
+                Ok((status, actual, expected))
+            })()
+            .map_err(|error| E2eError::Engine {
+                engine: "history conformance".to_owned(),
+                message: format!(
+                    "fixture={}, depth={DEPTH}, initial_fen={}, moves={}: {error}",
+                    fixture.name,
+                    fixture.fen,
+                    fixture.moves.join(" ")
+                ),
+            })?;
+            let (status, actual, expected) = result;
+            let search_equal = history_search_equal(&actual, &expected);
+            let status_equal = status == fixture.root_status;
+            passed &= search_equal && status_equal;
+            observations.push(serde_json::json!({
+                "position":fixture.name, "initial_fen":fixture.fen, "moves":fixture.moves,
+                "depth":DEPTH, "expected_root_status":fixture.root_status, "candidate_root_status":status,
+                "root_status_equal":status_equal, "search_equal":search_equal, "equal":search_equal && status_equal,
+                "candidate":actual, "reference":expected,
+            }));
+        }
+        candidate.quit()?;
+        reference.quit()?;
+        Ok(TestOutcome {
+            name: self.name().to_owned(),
+            passed,
+            duration: start.elapsed(),
+            detail: serde_json::json!({
+                "criterion":"played-history official bestmove, exact score, nodes and full-PV parity at depth 8; candidate root adjudication checked separately",
+                "root_search_semantics":"official go searches adjudicated roots too; search scores are not game outcomes",
+                "threads":1, "hash_mb":16, "positions":observations,
+            }).to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn every_history_fixture_contains_legal_played_moves() {
+        for fixture in history_positions().unwrap() {
+            let state = played_position(&fixture).unwrap();
+            assert_eq!(state.move_history(), fixture.moves, "{}", fixture.name);
+        }
+    }
+
+    #[test]
+    fn score_type_nodes_and_full_pv_are_history_parity_fields() {
+        let make = || SearchObservation {
+            bestmove: "b0c2".to_owned(),
+            final_info: InfoLine {
+                depth: Some(8),
+                score_cp: Some(3),
+                nodes: Some(100),
+                pv: vec!["b0c2".to_owned(), "b9c7".to_owned()],
+                ..InfoLine::default()
+            },
+        };
+        let baseline = make();
+        assert!(history_search_equal(&baseline, &make()));
+        let mut changed = make();
+        changed.final_info.score_cp = None;
+        changed.final_info.score_mate = Some(3);
+        assert!(!history_search_equal(&baseline, &changed));
+        let mut changed = make();
+        changed.final_info.nodes = Some(99);
+        assert!(!history_search_equal(&baseline, &changed));
+        let mut changed = make();
+        changed.final_info.pv.pop();
+        assert!(!history_search_equal(&baseline, &changed));
+    }
+}

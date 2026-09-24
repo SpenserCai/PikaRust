@@ -3,6 +3,7 @@ use crate::types::{Color, Key, Move, Piece, PieceType, Value};
 
 pub const BLOOM_FILTER_SIZE: usize = 1 << 14;
 
+#[derive(Clone)]
 pub struct BloomFilter {
     table: [u8; BLOOM_FILTER_SIZE],
 }

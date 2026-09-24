@@ -1,14 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::time::Instant;
+use std::{error::Error, path::PathBuf, process::ExitCode, time::Instant};
 
 use pikarust_core::bitboard::ensure_initialized;
 use pikarust_core::engine::{Engine, SearchLimits};
 use pikarust_core::position::{GenType, Position, generate};
+use pikarust_core::types::{VALUE_MATE, is_decisive};
+use uci_rs::{InfoParams, Score, UciResponse};
 
 const STARTPOS: &str = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1";
 
-/// Pikafish default bench positions (50 FENs from benchmark.cpp).
+/// Pikafish default bench positions (49 FENs from benchmark.cpp).
 const BENCH_FENS: &[&str] = &[
     // Initial position
     "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
@@ -105,9 +107,9 @@ fn bench_perft() {
     }
 }
 
-fn bench_nps() {
+fn bench_nps(model: &std::path::Path) -> Result<(), Box<dyn Error>> {
     ensure_initialized();
-    let mut engine = Engine::new().expect("engine init");
+    let mut engine = Engine::with_nnue_file(model)?;
 
     println!("\n=== NPS Benchmark ===");
     let limits = SearchLimits {
@@ -116,7 +118,7 @@ fn bench_nps() {
     };
 
     let start = Instant::now();
-    let result = engine.go(&limits).wait();
+    let result = engine.try_go(&limits)?.wait_result()?;
     let elapsed = start.elapsed();
 
     let nps = if elapsed.as_secs_f64() > 0.0 {
@@ -130,25 +132,86 @@ fn bench_nps() {
     println!("  Time: {elapsed:.3?}");
     println!("  NPS: {nps:.0}");
     println!("  Best move: {}", result.best_move);
+    Ok(())
 }
 
-/// Pikafish-aligned bench: 50 positions × depth 13, deterministic node count.
-fn bench() {
+#[derive(Debug)]
+struct BenchOptions {
+    depth: i32,
+    hash: u32,
+    model: PathBuf,
+}
+
+impl Default for BenchOptions {
+    fn default() -> Self {
+        Self {
+            depth: 13,
+            hash: 16,
+            model: std::env::var_os("PIKARUST_NNUE_MODEL")
+                .or_else(|| std::env::var_os("PIKARUST_NNUE_FILE"))
+                .map_or_else(|| PathBuf::from("models/pikafish.nnue"), PathBuf::from),
+        }
+    }
+}
+
+fn parse_options(args: &[String]) -> Result<BenchOptions, Box<dyn Error>> {
+    let mut options = BenchOptions::default();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let value = args
+            .next()
+            .ok_or_else(|| format!("missing value for {arg}"))?;
+        match arg.as_str() {
+            "--depth" => options.depth = value.parse()?,
+            "--hash" => options.hash = value.parse()?,
+            "--eval-file" => options.model = value.into(),
+            _ => return Err(format!("unknown argument: {arg}").into()),
+        }
+    }
+    SearchLimits {
+        depth: Some(options.depth),
+        ..SearchLimits::default()
+    }
+    .validate()?;
+    if options.hash == 0 {
+        return Err("hash must be positive".into());
+    }
+    Ok(options)
+}
+
+/// Convert internal decisive values without losing the UCI mate-score type.
+fn uci_score(score: i32, score_cp: i32) -> Score {
+    if is_decisive(score) {
+        let plies = if score > 0 {
+            VALUE_MATE - score
+        } else {
+            -(VALUE_MATE + score)
+        };
+        Score::Mate((plies + i32::from(plies > 0)) / 2)
+    } else {
+        Score::Cp(score_cp)
+    }
+}
+
+/// Continuous official default corpus: clear once, then retain TT and histories.
+fn bench(options: &BenchOptions) -> Result<(), Box<dyn Error>> {
     ensure_initialized();
-    let mut engine = Engine::new().expect("engine init");
+    let mut engine = Engine::with_nnue_file(&options.model)?;
+    engine.set_option("Hash", &options.hash.to_string())?;
+    engine.set_option("Threads", "1")?;
 
     // Warm-up: ensure ThreadPool + TT allocated before timing.
     let warmup = SearchLimits {
         depth: Some(1),
         ..SearchLimits::default()
     };
-    let _ = engine.go(&warmup).wait();
+    let _ = engine.try_go(&warmup)?.wait_result()?;
 
     // Clear TT once (matches Pikafish ucinewgame before bench).
-    engine.new_game().expect("new_game");
+    engine.new_game()?;
 
     let limits = SearchLimits {
-        depth: Some(13),
+        depth: Some(options.depth),
         ..SearchLimits::default()
     };
     let mut total_nodes: u64 = 0;
@@ -156,31 +219,34 @@ fn bench() {
     let elapsed = Instant::now();
 
     for (i, fen) in BENCH_FENS.iter().enumerate() {
-        engine.set_position(fen, &[]).expect("valid fen");
+        engine.set_position(fen, &[])?;
         let pos_start = Instant::now();
-        let result = engine.go(&limits).wait();
+        let result = engine.try_go(&limits)?.wait_result()?;
         let pos_ms = pos_start.elapsed().as_millis().max(1) as u64;
         let pos_nps = 1000 * result.nodes / pos_ms;
         total_nodes += result.nodes;
         eprintln!("\nPosition: {}/{} ({fen})", i + 1, BENCH_FENS.len());
         eprintln!(
-            "info depth {} seldepth {} multipv 1 score cp {} nodes {} nps {} hashfull {} tbhits 0 time {} pv{}",
-            result.depth,
-            result.seldepth,
-            result.score_cp,
-            result.nodes,
-            pos_nps,
-            result.hashfull,
-            pos_ms,
-            result
-                .pv
-                .iter()
-                .fold(String::new(), |s, m| format!("{s} {m}")),
+            "{}",
+            UciResponse::Info(InfoParams {
+                depth: Some(result.depth as u32),
+                seldepth: Some(result.seldepth as u32),
+                score: Some(uci_score(result.score, result.score_cp)),
+                nodes: Some(result.nodes),
+                nps: Some(pos_nps),
+                hashfull: Some(result.hashfull as u32),
+                time: Some(pos_ms),
+                pv: Some(result.pv.iter().map(ToString::to_string).collect()),
+                ..InfoParams::default()
+            })
         );
-        let ponder_str = result
-            .ponder_move
-            .map_or(String::new(), |p| format!(" ponder {p}"));
-        eprintln!("bestmove {}{ponder_str}", result.best_move);
+        eprintln!(
+            "{}",
+            UciResponse::BestMove {
+                best: result.best_move.to_string(),
+                ponder: result.ponder_move.map(|m| m.to_string()),
+            }
+        );
     }
 
     let elapsed_ms = elapsed.elapsed().as_millis().max(1) as u64;
@@ -191,21 +257,82 @@ fn bench() {
     eprintln!("Total time (ms) : {elapsed_ms}");
     eprintln!("Nodes searched  : {total_nodes}");
     eprintln!("Nodes/second    : {nps}");
+    Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() > 1 && args[1] == "bench" {
-        bench();
-        return;
+fn run() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--help" | "-h") => {
+            println!(
+                "Usage: pikarust-bench [bench [--depth N] [--hash MB] [--eval-file PATH] | --build-info]"
+            );
+            println!(
+                "bench: 49 continuous positions, depth 13, Hash 16 MiB, one thread by default."
+            );
+            println!(
+                "NNUE is required. No arguments runs the legacy perft and timed-search benchmarks."
+            );
+            return Ok(());
+        }
+        Some("--build-info") => {
+            println!(
+                "{{\"architecture\":\"{}\",\"os\":\"{}\",\"nnue_backend\":\"{}\"}}",
+                std::env::consts::ARCH,
+                std::env::consts::OS,
+                pikarust_core::nnue::simd::detect_backend()
+            );
+            return Ok(());
+        }
+        Some("bench") => return bench(&parse_options(&args[1..])?),
+        Some(arg) => return Err(format!("unknown command: {arg} (see --help)").into()),
+        None => {}
     }
 
     println!("PikaRust Macro Benchmarks");
     println!("========================\n");
 
     bench_perft();
-    bench_nps();
+    bench_nps(&BenchOptions::default().model)?;
 
     println!("\nDone.");
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("benchmark failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decisive_scores_use_uci_mate_units() {
+        assert_eq!(uci_score(VALUE_MATE - 1, 999), Score::Mate(1));
+        assert_eq!(uci_score(VALUE_MATE - 5, 999), Score::Mate(3));
+        assert_eq!(uci_score(-VALUE_MATE + 6, -999), Score::Mate(-3));
+        assert_eq!(uci_score(-VALUE_MATE, -999), Score::Mate(0));
+        assert_eq!(uci_score(100, 42), Score::Cp(42));
+    }
+
+    #[test]
+    fn invalid_limits_and_incomplete_options_fail() {
+        for args in [
+            vec!["--depth", "0"],
+            vec!["--hash", "0"],
+            vec!["--depth"],
+            vec!["--unknown", "1"],
+        ] {
+            assert!(
+                parse_options(&args.into_iter().map(String::from).collect::<Vec<_>>()).is_err()
+            );
+        }
+    }
 }

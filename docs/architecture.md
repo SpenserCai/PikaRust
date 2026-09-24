@@ -103,6 +103,34 @@ The web UI uses a native process through the bridge. It is not a browser-native
 WASM engine. The frontend may display or collect moves, but the engine remains
 the authority on legality and search results.
 
+The frontend inspects each position through the native engine:
+
+| Command | Inspection contract |
+| --- | --- |
+| `position ...` | Load the FEN and complete move history |
+| `go perft 1` | Root move divisions and `Nodes searched`, providing the legal moves |
+| `eval` | Final evaluation or the explicit in-check marker |
+| `d` | `Game status:` with `ongoing`, `draw`, `win`, or `loss` |
+| `isready` | `readyok` marking completion of the inspection |
+
+Wins and losses are relative to the side to move. Status includes the engine's
+repetition, move-limit, material, and no-legal-move adjudication. The frontend
+translates that result for the selected player; it does not maintain a second
+implementation of those adjudication rules. A twofold repetition alone does not
+end the game. Definitive rule judgments take precedence; otherwise, no legal
+move is a loss, including stalemate. Incomplete diagnostic responses produce an
+error rather than an inferred legal position.
+
+Cancelling a search sends `stop` followed by `isready`. The native application
+emits the stopped search's final `bestmove` before `readyok`; the frontend drains
+that response before starting a replacement operation, so stale results cannot
+be applied to a new game or an undone position.
+
+This browser adapter targets the PikaRust executable and its diagnostic
+extensions. Perft, evaluation, and game-status diagnostic formats are not a
+portable UCI interface, so an arbitrary UCI engine is not a compatible
+replacement without an adapter.
+
 ## Extension policy
 
 Future Python, Node.js, C, or WASM integrations should use separate adapter

@@ -15,7 +15,9 @@ before changing engine behavior.
 - `crates/pikarust-app` adapts the engine to UCI and HTTP/WebSocket applications.
   Applications own paths, environment variables, logging, and deployment policy.
 - `pikarust-web/bridge` adapts a UCI child process; `pikarust-web/frontend` owns
-  presentation. Do not duplicate authoritative move legality in the frontend.
+  presentation. Do not duplicate authoritative move legality or terminal-game
+  adjudication in the frontend. Keep the PikaRust diagnostic contract used by
+  the bridge and frontend documented and covered by protocol tests.
 - `crates/pikarust-bench` and `e2e_platform` are validation tools, not runtime
   dependencies. Keep their commands compatible with CI.
 - Future bindings belong in separate crates. Expose explicit ownership,
@@ -89,6 +91,27 @@ Follow `docs/validation.md` for reference E2E, feature combinations, frontend
 checks, slow tests, and strength testing. Missing prerequisites or zero matched
 tests are not a passing validation result. Never claim a remote workflow passed
 until its actual result is available.
+
+For search or evaluation changes, run `scripts/run-bench.sh compare` as well as
+the alignment suite. Keep the benchmark's continuous search-state sequence
+distinct from the E2E oracle's per-position resets. Preserve model, binaries,
+build configuration, exact-output comparisons, and timing reports in ignored
+outputs or CI artifacts; do not substitute an NPS ratio for correctness evidence.
+
+For position-copying, repetition, chase, or make/unmake changes, include
+`scripts/run-e2e.sh --filter search_history_equivalence`. Preserve the complete
+move sequences in `e2e_platform/fixtures/search-history.tsv`; a final FEN alone
+does not preserve repetition context. Keep native game-status expectations
+separate from official search-score comparisons.
+
+For frontend or bridge changes, build the production bundle and run
+`node scripts/check-web.mjs` with its Playwright Chromium prerequisites. Exercise
+the real browser, bridge, and native engine together. Cover both player colors,
+search controls, move display, undo/new-game during a search, and reconnect
+behavior. Frontend lint/build and
+the separate HTTP server smoke test do not establish browser functionality.
+Follow the maintained procedure in `docs/validation.md` and record actual
+results without committing screenshots or session logs as documentation.
 
 ## Collaboration and repository hygiene
 

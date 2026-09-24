@@ -99,8 +99,9 @@ scripts/run-e2e.sh --suite alignment
 # Inspect upstream code without building it or downloading another model.
 scripts/setup-pikafish.sh --source-only
 
-# Local search benchmark.
+# Standard 49-position benchmark, then comparison with pinned Pikafish.
 scripts/run-bench.sh
+scripts/run-bench.sh compare
 ```
 
 Reference source and build output are disposable and ignored by Git. Missing
@@ -112,6 +113,12 @@ The alignment suite requires exact official best moves, scores, node counts, and
 complete PVs at depths 5, 8, and 13 across the maintained position corpus, plus a
 reviewed candidate snapshot. These gates describe that corpus and configuration;
 they do not establish identity for every position or search budget.
+
+The standard benchmark retains search state across its 49-position sequence;
+the E2E oracle resets for every position and depth. See the
+[benchmark procedure](docs/validation.md#standard-benchmark) for repeatable
+timing, matching CPU backends, comparison reports, and the difference between
+these checks.
 
 Node counts are useful regression signals, and NPS measures throughput on a
 particular machine. Neither proves search correctness or equivalent playing
@@ -146,7 +153,15 @@ cd pikarust-web/dist
 The local bundle includes the selected model and its license terms. Set
 `PIKARUST_NNUE_FILE` before building to select another model path. Open
 <http://localhost:9000>. The browser talks to a native engine through the bridge;
-it does not execute the engine as WASM.
+it does not execute the engine as WASM. The bridge targets the bundled PikaRust
+engine, including its position and game-status diagnostic extensions; generic
+UCI support alone does not make another engine a compatible replacement.
+
+For repeatable browser acceptance checks, use Node.js 22 or newer, install
+Playwright Chromium, and run `node scripts/check-web.mjs` against the built
+bundle. It starts its own local bridge and engine. The
+[browser validation procedure](docs/validation.md#browser-functional-verification)
+lists the setup commands, covered interactions, and retained reports.
 
 ### HTTP/WebSocket server
 

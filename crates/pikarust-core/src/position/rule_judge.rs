@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_rule_judge_preserves_two_fold_with_bloom_collision() {
-        let mut pos = Position::from_fen("3k5/3R5/9/9/9/9/9/9/4P4/4K4 b - - 0 1")
+        let mut pos = Position::from_fen("3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1")
             .expect("valid perpetual-check position");
         let moves = [
             Move::make(Square::SQ_D9, Square::SQ_E9),

@@ -58,6 +58,11 @@ scripts/setup-pikafish.sh
 scripts/run-e2e.sh --suite alignment
 ```
 
+For search and evaluation changes, also run `scripts/run-bench.sh compare` to
+check the standard continuous benchmark sequence. Preserve its report with the
+PR evidence; do not compare its node total with the E2E suite, which resets
+search state before each position and depth.
+
 For HTTP/WebSocket changes, build `pikarust-server` with the `server` feature and
 run `node scripts/check-server.mjs` with Node.js 22 or newer. See
 [validation](docs/validation.md) for the full command and report location.
@@ -69,6 +74,13 @@ npm --prefix pikarust-web/frontend ci
 npm --prefix pikarust-web/frontend run lint
 npm --prefix pikarust-web/frontend run build
 ```
+
+Also run the complete frontend, bridge, and native engine through the
+[browser functional checks](docs/validation.md#browser-functional-verification).
+The `scripts/check-web.mjs` entry point starts the production bundle and drives
+Playwright Chromium. Install its browser dependencies and build the bundle as
+described in that procedure. The separate HTTP server smoke test does not
+exercise the board UI.
 
 See [validation](docs/validation.md) for slow tests, strength experiments, and
 interpreting differences. The workflow files specify the required platform and

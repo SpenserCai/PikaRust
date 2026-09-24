@@ -1,0 +1,12 @@
+# name	initial FEN	complete UCI move history	PikaRust root game status
+# Search oracle: unmodified official Pikafish from scripts/reference.lock.
+# All searches start after ucinewgame and preserve these played moves at depth 8.
+# The official go command searches even an adjudicated root: its score is not
+# a game-result oracle. Root status is checked separately from search parity.
+opening_development	rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1	h2e2 h9g7 b0c2 b7e7	ongoing
+rook_twofold	rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1	a0a1 a9a8 a1a0 a8a9	ongoing
+rook_threefold_draw	rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1	a0a1 a9a8 a1a0 a8a9 a0a1 a9a8 a1a0 a8a9	draw
+perpetual_check_twofold	3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1	d9e9 d8e8 e9d9 e8d8	ongoing
+perpetual_check_black_wins	3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1	d9e9 d8e8 e9d9 e8d8 d9e9 d8e8 e9d9 e8d8	win
+perpetual_check_white_loses	3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1	d9e9 d8e8 e9d9 e8d8 d9e9 d8e8 e9d9 e8d8 d9e9	loss
+moving_target_chase	2bak1b1r/4a4/2n4cn/p6C1/4pN3/P2N4R/4P1P1P/3CB4/4A2r1/c1BAKR3 w	d2c2 c9e7 c2c1 h1h2 c1c2 h2h1	ongoing

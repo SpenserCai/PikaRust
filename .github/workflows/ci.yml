@@ -19,15 +19,16 @@ env:
 
 jobs:
   frontend:
-    name: Web client
+    name: Web browser integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: pikarust-web/frontend
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          lfs: true
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -36,7 +37,26 @@ jobs:
           cache-dependency-path: pikarust-web/frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
-      - run: npm run build
+      - run: npm test
+      - name: Verify NNUE and prepare the production web bundle
+        working-directory: .
+        run: |
+          rustup show
+          bash scripts/setup-pikafish.sh --verify-model
+          bash scripts/build-web.sh
+      - name: Install the locked Playwright Chromium browser
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Exercise the browser, native bridge, and NNUE engine together
+        working-directory: .
+        run: node scripts/check-web.mjs
+      - name: Preserve browser evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-${{ github.sha }}
+          path: target/e2e/web/
+          if-no-files-found: warn
+          retention-days: 30
 
   quality:
     name: Format, lint, and documentation
@@ -53,7 +73,7 @@ jobs:
           rustup component add rustfmt clippy
       - name: Validate workflow syntax and expressions
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -color
-      - name: Check release safety contracts
+      - name: Check validation and release tooling contracts
         run: python3 -m unittest discover -s scripts/tests -v
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -122,8 +142,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - name: Build the pinned official reference
-        run: bash scripts/setup-pikafish.sh
+      - name: Compare the standard benchmark against the pinned official engine
+        run: bash scripts/run-bench.sh compare --rounds 1 --depth 13 --hash 16 --output target/e2e/benchmark
       - name: UCI and cancellation behavior
         run: bash scripts/run-e2e.sh --suite smoke
         env:
@@ -141,6 +161,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: alignment-${{ github.sha }}
-          path: target/e2e/
+          path: |
+            target/e2e/*.json
+            target/e2e/*.log
+            target/e2e/benchmark/*.json
+            target/e2e/benchmark/*.log
+            target/e2e/benchmark/candidate.patch
           if-no-files-found: warn
           retention-days: 30
