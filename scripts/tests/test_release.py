@@ -4,7 +4,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
+import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -283,6 +286,37 @@ class ArtifactTests(unittest.TestCase):
         subprocess.run(["git", "-c", "user.name=Release test", "-c", "user.email=release@example.invalid", "commit", "-qm", "weights"], cwd=self.root, check=True)
         with self.assertRaisesRegex(ValueError, "NNUE weights"):
             release.source(self.output)
+
+    def test_source_archive_keeps_lfs_pointer_when_smudge_is_configured(self):
+        isolated_config = patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        isolated_config.start()
+        self.addCleanup(isolated_config.stop)
+        (self.root / ".gitattributes").write_text("models/*.nnue filter=lfs\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitattributes"], cwd=self.root, check=True)
+        subprocess.run(["git", "-c", "user.name=Release test", "-c", "user.email=release@example.invalid", "commit", "-qm", "LFS attributes"], cwd=self.root, check=True)
+        marker = self.root / "smudge-called"
+        filter_script = self.root / "smudge.py"
+        filter_script.write_text(
+            "import pathlib, sys\nsys.stdin.buffer.read()\n"
+            f"pathlib.Path({str(marker)!r}).write_text('called')\n"
+            "sys.stdout.buffer.write(b'expanded model weights')\n", encoding="utf-8")
+        command = f"{shlex.quote(Path(sys.executable).as_posix())} {shlex.quote(filter_script.as_posix())}"
+        for key, value in (("smudge", command), ("required", "true")):
+            subprocess.run(["git", "config", "--local", f"filter.lfs.{key}", value], cwd=self.root, check=True)
+
+        # Exercise Git's real conversion path, not a subprocess mock.
+        control = self.root / "with-smudge.tar"
+        subprocess.run(["git", "archive", "--format=tar", f"--output={control}", "HEAD"], cwd=self.root, check=True)
+        with tarfile.open(control) as archive:
+            self.assertEqual(archive.extractfile("models/pikafish.nnue").read(), b"expanded model weights")
+        self.assertTrue(marker.exists())
+        marker.unlink()
+
+        release.source(self.output)
+        self.assertFalse(marker.exists())
+        pointer = subprocess.check_output(["git", "show", "HEAD:models/pikafish.nnue"], cwd=self.root)
+        with tarfile.open(self.output / "pikarust-0.1.0-source.tar.gz") as archive:
+            self.assertEqual(archive.extractfile("pikarust-0.1.0-source/models/pikafish.nnue").read(), pointer)
 
     def test_lockfile_workspace_version_cannot_lag_manifest(self):
         self.assertEqual(check_release.validate_workspace()["version"], "0.1.0")

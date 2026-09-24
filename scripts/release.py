@@ -328,7 +328,9 @@ def source(output: Path) -> None:
     release_version = version()
     stem = f"pikarust-{release_version}-source"
     archive = output / f"{stem}.tar.gz"
-    subprocess.run(["git", "archive", "--format=tar.gz", f"--prefix={stem}/",
+    # Archive committed LFS pointers even when the checkout has hydrated weights.
+    subprocess.run(["git", "-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=",
+                    "-c", "filter.lfs.required=false", "archive", "--format=tar.gz", f"--prefix={stem}/",
                     f"--output={archive.resolve()}", "HEAD"], cwd=ROOT, check=True)
     validate_archive(archive, release_version, checked_sha(git("rev-parse", "HEAD")), "source")
     checksum(archive)
