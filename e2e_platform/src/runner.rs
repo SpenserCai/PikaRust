@@ -2,73 +2,76 @@ use crate::cases::{TestOutcome, all_cases, execute_case};
 use crate::checks::preflight::{self, PreflightResult};
 use crate::config::E2eConfig;
 
-/// Aggregated results from a full E2E run.
+/// Aggregated results, including selection errors rather than vacuous success.
 pub struct RunReport {
-    /// Pre-flight check results.
     pub preflight_results: Vec<PreflightResult>,
-    /// Test case outcomes.
     pub test_outcomes: Vec<TestOutcome>,
 }
 
-/// Execute all E2E tests.
-///
-/// Runs preflight checks first. If critical checks fail, skips tests.
-/// Optionally filters tests by name substring.
-pub fn run_all(config: &E2eConfig, filter: Option<&str>) -> RunReport {
-    let preflight_results = preflight::run_preflight(config);
-
-    let critical_failed = preflight_results.iter().any(|r| !r.passed);
-    if critical_failed {
+/// Execute an explicitly selected suite. Empty selections fail before spawning.
+pub fn run_all(config: &E2eConfig, filter: Option<&str>, suite: &str) -> RunReport {
+    let cases = all_cases();
+    let has_exact = filter.is_some_and(|filter| cases.iter().any(|case| case.name() == filter));
+    let selected: Vec<_> = cases
+        .iter()
+        .filter(|case| {
+            if let Some(filter) = filter {
+                return if has_exact {
+                    case.name() == filter
+                } else {
+                    case.name().contains(filter)
+                };
+            }
+            match suite {
+                "smoke" => matches!(
+                    case.name(),
+                    "uci_compliance" | "search_depth" | "search_movetime" | "search_stop"
+                ),
+                "alignment" => matches!(
+                    case.name(),
+                    "perft_equivalence"
+                        | "nnue_equivalence"
+                        | "search_comparison"
+                        | "search_regression"
+                        | "search_history_equivalence"
+                ),
+                "all" => !case.is_slow(),
+                _ => false,
+            }
+        })
+        .collect();
+    if selected.is_empty() {
+        return RunReport {
+            preflight_results: vec![PreflightResult {
+                name: "test selection".to_owned(),
+                passed: false,
+                detail: format!("no cases selected: suite={suite}, filter={filter:?}"),
+            }],
+            test_outcomes: Vec::new(),
+        };
+    }
+    let needs_reference = selected.iter().any(|case| case.requires_pikafish());
+    let preflight_results = preflight::run_preflight(config, needs_reference);
+    if preflight_results.iter().any(|result| !result.passed) {
         return RunReport {
             preflight_results,
             test_outcomes: Vec::new(),
         };
     }
-
-    let pikafish_available = config.pikafish_bin.exists();
-    let cases = all_cases();
-    let mut test_outcomes = Vec::new();
-
-    for case in &cases {
-        if let Some(f) = filter {
-            // Exact match takes priority; fall back to substring match only
-            // when no case matches exactly.  This prevents "strength_gauntlet"
-            // from also matching "strength_gauntlet_self" / "_ref".
-            let has_exact = cases.iter().any(|c| c.name() == f);
-            if has_exact {
-                if case.name() != f {
-                    continue;
-                }
-            } else if !case.name().contains(f) {
-                continue;
-            }
-        }
-
-        // Skip slow tests (e.g. strength_gauntlet) unless explicitly requested via filter.
-        if filter.is_none() && case.is_slow() {
-            continue;
-        }
-
-        if case.requires_pikafish() && !pikafish_available {
-            test_outcomes.push(TestOutcome {
-                name: case.name().to_owned(),
-                passed: false,
-                duration: std::time::Duration::ZERO,
-                detail: "skipped: pikafish binary not available".to_owned(),
-            });
-            continue;
-        }
-
-        log::info!("running test: {}", case.name());
-        let outcome = execute_case(case.as_ref(), config);
-        log::info!(
-            "  {} ({}ms)",
-            if outcome.passed { "PASS" } else { "FAIL" },
-            outcome.duration.as_millis()
-        );
-        test_outcomes.push(outcome);
-    }
-
+    let test_outcomes = selected
+        .iter()
+        .map(|case| {
+            log::info!("running test: {}", case.name());
+            let outcome = execute_case(case.as_ref(), config);
+            log::info!(
+                "{}: {} ({}ms)",
+                outcome.name,
+                if outcome.passed { "PASS" } else { "FAIL" },
+                outcome.duration.as_millis()
+            );
+            outcome
+        })
+        .collect();
     RunReport {
         preflight_results,
         test_outcomes,

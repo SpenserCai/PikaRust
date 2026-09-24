@@ -3,17 +3,10 @@ use pikarust_core::nnue::feature_transformer::{
 };
 use pikarust_core::nnue::simd::SimdOps;
 use pikarust_core::nnue::simd::scalar::Scalar;
-use pikarust_core::nnue::{Accumulator, Network, NnueModel};
+use pikarust_core::nnue::{Accumulator, Network};
 use pikarust_core::position::Position;
 
-fn load_network() -> Option<Network> {
-    let model_path = std::path::Path::new("../models/pikafish.nnue");
-    if !model_path.exists() {
-        return None;
-    }
-    let model = NnueModel::load(model_path).ok()?;
-    Some(Network::new(model))
-}
+mod common;
 
 fn eval_position(net: &Network, pos: &Position) -> (i32, i32) {
     let mut psq_acc = Accumulator::new();
@@ -32,48 +25,47 @@ fn eval_position(net: &Network, pos: &Position) -> (i32, i32) {
 
 // ---------------------------------------------------------------
 // End-to-end NNUE snapshot tests
+// Oracle: official-pikafish/Pikafish 76239d0b06720bfa4588989fd4ac7573e9dbf887,
+// network SHA-256 92b5fb5d333800654377a93ad8d28d0b4c8b34fb9a3d1cdaafd6ecdfb3459bb2.
+// Components independently read from Network::evaluate in nnue/network.cpp;
+// the threat prefix comes from AccumulatorStack::latest<ThreatFeatureSet>().
+// Unlike search centipawns these integer components must match exactly.
 // ---------------------------------------------------------------
 
 #[test]
 fn test_nnue_snapshot_startpos() {
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let pos = Position::start_pos().expect("start_pos");
-    let (psqt, positional) = eval_position(&net, &pos);
+    let (psqt, positional) = eval_position(net, &pos);
     assert_eq!(psqt, 0, "startpos psqt changed: got {psqt}");
     assert_eq!(
-        positional, 133,
+        positional, 192,
         "startpos positional changed: got {positional}"
     );
 }
 
 #[test]
 fn test_nnue_snapshot_midgame() {
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let fen = "r1bakab1r/9/2n1c2c1/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R w - - 0 5";
     let pos = Position::from_fen(fen).expect("parse fen");
-    let (psqt, positional) = eval_position(&net, &pos);
+    let (psqt, positional) = eval_position(net, &pos);
     assert_eq!(psqt, 775, "midgame psqt changed: got {psqt}");
     assert_eq!(
-        positional, -154,
+        positional, 533,
         "midgame positional changed: got {positional}"
     );
 }
 
 #[test]
 fn test_nnue_snapshot_endgame() {
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let fen = "4k4/9/9/9/9/9/9/9/4r4/4K4 w - - 0 1";
     let pos = Position::from_fen(fen).expect("parse fen");
-    let (psqt, positional) = eval_position(&net, &pos);
+    let (psqt, positional) = eval_position(net, &pos);
     assert_eq!(psqt, -1247, "endgame psqt changed: got {psqt}");
     assert_eq!(
-        positional, -675,
+        positional, -1546,
         "endgame positional changed: got {positional}"
     );
 }
@@ -84,9 +76,7 @@ fn test_nnue_snapshot_endgame() {
 
 #[test]
 fn test_accumulator_snapshot_startpos() {
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let pos = Position::start_pos().expect("start_pos");
     let mut psq_acc = Accumulator::new();
     let mut threat_acc = Accumulator::new();
@@ -95,7 +85,7 @@ fn test_accumulator_snapshot_startpos() {
 
     assert_eq!(psq_acc.accumulation[0][0..4], [2, -84, 28, 187]);
     assert_eq!(psq_acc.accumulation[1][0..4], [2, -84, 28, 187]);
-    assert_eq!(threat_acc.accumulation[0][0..4], [-15, 40, -20, 127]);
+    assert_eq!(threat_acc.accumulation[0][0..4], [-27, 25, -12, 102]);
 }
 
 // ---------------------------------------------------------------
@@ -104,9 +94,7 @@ fn test_accumulator_snapshot_startpos() {
 
 #[test]
 fn test_full_refresh_deterministic() {
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let pos = Position::start_pos().expect("start_pos");
 
     let mut acc1 = Accumulator::new();
@@ -253,9 +241,7 @@ fn test_affine_propagate_with_real_model_weights() {
     use pikarust_core::nnue::{L2_BIG, WEIGHT_SCALE_BITS};
     use pikarust_core::types::Color;
 
-    let Some(net) = load_network() else {
-        return;
-    };
+    let net = common::network();
     let fen = "4k4/9/9/9/9/9/9/9/4r4/4K4 w - - 0 1";
     let pos = Position::from_fen(fen).expect("parse fen");
     let mut psq_acc = Accumulator::new();

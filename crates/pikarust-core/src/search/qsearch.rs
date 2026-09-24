@@ -61,6 +61,7 @@ impl Worker {
         let pos_key = self.root_pos.key();
         let probe = self.tt.probe(pos_key);
         let tt_hit = probe.found;
+        self.ss_tt_hits[ss] = tt_hit;
         let mut tt_data = probe.data;
         let tt_writer = probe.writer;
 
@@ -125,6 +126,7 @@ impl Worker {
                 }
                 if !tt_hit {
                     tt_writer.write(
+                        &self.tt,
                         pos_key,
                         VALUE_NONE,
                         false,
@@ -152,23 +154,9 @@ impl Worker {
         };
 
         // Move generation — build contHist from search stack (only ss-1 for qsearch)
-        let (cont_hist_buf, cont_hist_len) = self.build_cont_hist_for_movepicker(ply);
-        let cont_hist_slice = &cont_hist_buf[..cont_hist_len];
-
-        let mut mp = MovePicker::new_main(
-            &self.root_pos,
-            tt_data.tt_move,
-            DEPTH_QS,
-            &self.main_history,
-            &self.low_ply_history,
-            &self.capture_history,
-            &cont_hist_slice,
-            &self.pawn_history,
-            ply,
-        );
-
+        let mut mp = MovePicker::new_main(&self.root_pos, tt_data.tt_move, DEPTH_QS, ply);
         loop {
-            let m = mp.next_move(&self.root_pos);
+            let m = self.pick_next_move(&mut mp, ply, 1);
             if m == Move::NONE {
                 break;
             }
@@ -279,6 +267,7 @@ impl Worker {
         }
 
         tt_writer.write(
+            &self.tt,
             pos_key,
             value_to_tt(best_value, ply),
             pv_hit,

@@ -6,6 +6,8 @@ use std::time::Duration;
 pub enum SearchMode {
     /// Fixed depth search.
     Depth(u32),
+    /// Fixed nodes per move, independent of host speed.
+    Nodes(u64),
     /// Fixed time per move in milliseconds.
     Movetime(u64),
 }
@@ -32,6 +34,8 @@ pub struct MatchConfig {
     pub response_timeout: Duration,
     /// Hash table size in MB.
     pub hash_mb: u32,
+    /// Explicit model file for current engines (legacy engines use cwd).
+    pub nnue_model: Option<PathBuf>,
     /// Starting position FEN (None = startpos).
     pub start_fen: Option<String>,
 }

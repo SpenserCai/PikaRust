@@ -462,15 +462,12 @@ mod tests {
 
     #[test]
     fn test_refresh_psq_accumulator_start_pos() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let pos = Position::start_pos().expect("start_pos");
         let simd = test_simd();
         let mut acc = Accumulator::new();
-        refresh_psq_accumulator(&model, &pos, &mut acc, &simd);
+        refresh_psq_accumulator(model, &pos, &mut acc, &simd);
         assert!(acc.computed[0]);
         assert!(acc.computed[1]);
         let has_nonzero = acc.accumulation[0].iter().any(|&v| v != 0);
@@ -479,15 +476,12 @@ mod tests {
 
     #[test]
     fn test_refresh_threat_accumulator_start_pos() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let pos = Position::start_pos().expect("start_pos");
         let simd = test_simd();
         let mut acc = Accumulator::new();
-        refresh_threat_accumulator(&model, &pos, &mut acc, &simd);
+        refresh_threat_accumulator(model, &pos, &mut acc, &simd);
         assert!(acc.computed[0]);
         assert!(acc.computed[1]);
         let has_nonzero = acc.accumulation[0].iter().any(|&v| v != 0);
@@ -499,16 +493,13 @@ mod tests {
 
     #[test]
     fn test_incremental_psq_matches_refresh_all_moves() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let mut pos = Position::start_pos().expect("start_pos");
 
         let simd = test_simd();
         let mut prev_acc = Accumulator::new();
-        refresh_psq_accumulator(&model, &pos, &mut prev_acc, &simd);
+        refresh_psq_accumulator(model, &pos, &mut prev_acc, &simd);
 
         let ml = generate(&pos, GenType::Legal);
         for i in 0..ml.len() {
@@ -538,17 +529,10 @@ mod tests {
             pos.do_move(m, gives_check);
 
             let mut inc_acc = Accumulator::new();
-            update_psq_accumulator_incremental(
-                &model,
-                &pos,
-                &prev_acc,
-                &mut inc_acc,
-                &dirty,
-                &simd,
-            );
+            update_psq_accumulator_incremental(model, &pos, &prev_acc, &mut inc_acc, &dirty, &simd);
 
             let mut ref_acc = Accumulator::new();
-            refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
+            refresh_psq_accumulator(model, &pos, &mut ref_acc, &simd);
 
             for c in 0..2 {
                 assert_eq!(
@@ -567,11 +551,8 @@ mod tests {
 
     #[test]
     fn test_incremental_psq_matches_refresh_captures() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
 
         let fens = [
             "r1ba1a3/4kn3/2n1b4/pNp1p1p1p/4c4/6P2/P1P2R2P/1CcC5/9/2BAKAB2 w - - 0 1",
@@ -583,7 +564,7 @@ mod tests {
             let mut pos = Position::from_fen(fen).expect("parse fen");
             let simd = test_simd();
             let mut prev_acc = Accumulator::new();
-            refresh_psq_accumulator(&model, &pos, &mut prev_acc, &simd);
+            refresh_psq_accumulator(model, &pos, &mut prev_acc, &simd);
 
             let ml = generate(&pos, GenType::Legal);
             for i in 0..ml.len() {
@@ -636,7 +617,7 @@ mod tests {
 
                 let mut inc_acc = Accumulator::new();
                 update_psq_accumulator_incremental(
-                    &model,
+                    model,
                     &pos,
                     &prev_acc,
                     &mut inc_acc,
@@ -645,7 +626,7 @@ mod tests {
                 );
 
                 let mut ref_acc = Accumulator::new();
-                refresh_psq_accumulator(&model, &pos, &mut ref_acc, &simd);
+                refresh_psq_accumulator(model, &pos, &mut ref_acc, &simd);
 
                 for c in 0..2 {
                     assert_eq!(
@@ -665,16 +646,13 @@ mod tests {
 
     #[test]
     fn test_threat_incremental_vs_refresh_startpos() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let mut pos = Position::start_pos().expect("start_pos");
         let simd = test_simd();
 
         let mut prev_acc = Accumulator::new();
-        refresh_threat_accumulator(&model, &pos, &mut prev_acc, &simd);
+        refresh_threat_accumulator(model, &pos, &mut prev_acc, &simd);
 
         let ml = generate(&pos, GenType::Legal);
         for i in 0..ml.len() {
@@ -698,7 +676,7 @@ mod tests {
 
             let mut inc_acc = Accumulator::new();
             update_threat_accumulator_incremental(
-                &model,
+                model,
                 &pos,
                 &prev_acc,
                 &mut inc_acc,
@@ -707,7 +685,7 @@ mod tests {
             );
 
             let mut ref_acc = Accumulator::new();
-            refresh_threat_accumulator(&model, &pos, &mut ref_acc, &simd);
+            refresh_threat_accumulator(model, &pos, &mut ref_acc, &simd);
 
             for c in 0..2 {
                 assert_eq!(
@@ -722,11 +700,8 @@ mod tests {
 
     #[test]
     fn test_threat_incremental_vs_refresh_captures() {
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let simd = test_simd();
 
         let fens = [
@@ -740,7 +715,7 @@ mod tests {
         for fen in &fens {
             let mut pos = Position::from_fen(fen).expect("parse fen");
             let mut prev_acc = Accumulator::new();
-            refresh_threat_accumulator(&model, &pos, &mut prev_acc, &simd);
+            refresh_threat_accumulator(model, &pos, &mut prev_acc, &simd);
 
             let ml = generate(&pos, GenType::Legal);
             for i in 0..ml.len() {
@@ -765,7 +740,7 @@ mod tests {
 
                 let mut inc_acc = Accumulator::new();
                 update_threat_accumulator_incremental(
-                    &model,
+                    model,
                     &pos,
                     &prev_acc,
                     &mut inc_acc,
@@ -774,7 +749,7 @@ mod tests {
                 );
 
                 let mut ref_acc = Accumulator::new();
-                refresh_threat_accumulator(&model, &pos, &mut ref_acc, &simd);
+                refresh_threat_accumulator(model, &pos, &mut ref_acc, &simd);
 
                 for c in 0..2 {
                     assert_eq!(
@@ -794,18 +769,15 @@ mod tests {
         use crate::nnue::features::half_ka_v2_hm;
         use crate::types::Color;
 
-        let model_path = std::path::Path::new("../../models/pikafish.nnue");
-        if !model_path.exists() {
-            return;
-        }
-        let model = NnueModel::load(model_path).expect("model load");
+        let network = crate::nnue::test_network();
+        let model = network.model();
         let simd = test_simd();
 
         // Test 2-ply from bench position 7
         let fen = "2b1ka2r/3na2c1/4b3n/8R/8C/4C1P2/P1P1P3P/4B1N2/1r2A4/2BAK4 w - - 0 1";
         let mut pos = Position::from_fen(fen).expect("parse fen");
         let mut prev_acc = Accumulator::new();
-        refresh_threat_accumulator(&model, &pos, &mut prev_acc, &simd);
+        refresh_threat_accumulator(model, &pos, &mut prev_acc, &simd);
 
         let ml1 = generate(&pos, GenType::Legal);
         for i in 0..ml1.len() {
@@ -826,10 +798,10 @@ mod tests {
             dts1.requires_refresh[1] = mb1[1] != ma1[1];
 
             let mut acc1 = Accumulator::new();
-            update_threat_accumulator_incremental(&model, &pos, &prev_acc, &mut acc1, &dts1, &simd);
+            update_threat_accumulator_incremental(model, &pos, &prev_acc, &mut acc1, &dts1, &simd);
 
             let mut ref1 = Accumulator::new();
-            refresh_threat_accumulator(&model, &pos, &mut ref1, &simd);
+            refresh_threat_accumulator(model, &pos, &mut ref1, &simd);
 
             for c in 0..2 {
                 assert_eq!(
@@ -858,10 +830,10 @@ mod tests {
                 dts2.requires_refresh[1] = mb2[1] != ma2[1];
 
                 let mut acc2 = Accumulator::new();
-                update_threat_accumulator_incremental(&model, &pos, &acc1, &mut acc2, &dts2, &simd);
+                update_threat_accumulator_incremental(model, &pos, &acc1, &mut acc2, &dts2, &simd);
 
                 let mut ref2 = Accumulator::new();
-                refresh_threat_accumulator(&model, &pos, &mut ref2, &simd);
+                refresh_threat_accumulator(model, &pos, &mut ref2, &simd);
 
                 for c in 0..2 {
                     assert_eq!(

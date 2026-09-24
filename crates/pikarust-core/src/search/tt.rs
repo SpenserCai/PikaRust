@@ -1,5 +1,4 @@
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicUsize, Ordering};
 
 use crate::types::{Bound, DEPTH_NONE, Depth, Key, Move, VALUE_NONE, Value};
 
@@ -30,78 +29,50 @@ impl TTData {
     };
 }
 
-// TTEntry: exactly 10 bytes, matching Pikafish layout.
-//
-// Pikafish stores this as a plain packed struct with racy reads/writes.
-// We mirror this exactly: raw byte storage with unaligned access.
-//
-// Layout (10 bytes):
-//   offset 0: key16     (u16)
-//   offset 2: depth8    (u8)
-//   offset 3: genBound8 (u8)  — [pv:1][bound:2][gen:5]
-//   offset 4: move16    (u16)
-//   offset 6: value16   (i16)
-//   offset 8: eval16    (i16)
-//
-// For efficiency we pack the first 8 bytes into a u64:
-//   bits  0..15: key16
-//   bits 16..23: depth8
-//   bits 24..31: genBound8
-//   bits 32..47: move16
-//   bits 48..63: value16
+// Individual atomic fields preserve Pikafish's 10-byte entry and table capacity.
+// A probe may observe fields from different concurrent writes, so TT data remains
+// an advisory search hint rather than a coherent snapshot. Each field access is
+// nevertheless race-free; a C++-style "benign" non-atomic race is not sound Rust.
 #[repr(C)]
 struct TTEntry {
-    data: UnsafeCell<[u8; 8]>,
-    eval: UnsafeCell<[u8; 2]>,
+    key16: AtomicU16,
+    depth8: AtomicU8,
+    gen_bound8: AtomicU8,
+    move16: AtomicU16,
+    value16: AtomicU16,
+    eval16: AtomicU16,
 }
 
-// SAFETY: TTEntry uses racy reads/writes (same concurrency model as Pikafish).
-// Data races on individual entries are benign — a torn read just produces
-// garbage that fails the key16 check and gets discarded.
-#[allow(unsafe_code)]
-unsafe impl Sync for TTEntry {}
-
 impl TTEntry {
-    const ZERO: Self = Self {
-        data: UnsafeCell::new([0; 8]),
-        eval: UnsafeCell::new([0; 2]),
-    };
-
-    #[allow(unsafe_code)]
-    #[inline]
-    fn load_data(&self) -> u64 {
-        unsafe { std::ptr::read_unaligned(self.data.get().cast::<u64>()) }
+    const fn zero() -> Self {
+        Self {
+            key16: AtomicU16::new(0),
+            depth8: AtomicU8::new(0),
+            gen_bound8: AtomicU8::new(0),
+            move16: AtomicU16::new(0),
+            value16: AtomicU16::new(0),
+            eval16: AtomicU16::new(0),
+        }
     }
 
-    #[allow(unsafe_code)]
-    #[inline]
-    fn store_data(&self, val: u64) {
-        unsafe { std::ptr::write_unaligned(self.data.get().cast::<u64>(), val) }
-    }
-
-    #[allow(unsafe_code)]
-    #[inline]
-    fn load_eval(&self) -> i16 {
-        unsafe { std::ptr::read_unaligned(self.eval.get().cast::<i16>()) }
-    }
-
-    #[allow(unsafe_code)]
-    #[inline]
-    fn store_eval(&self, val: i16) {
-        unsafe { std::ptr::write_unaligned(self.eval.get().cast::<i16>(), val) }
+    fn clear(&self) {
+        self.key16.store(0, Ordering::Relaxed);
+        self.depth8.store(0, Ordering::Relaxed);
+        self.gen_bound8.store(0, Ordering::Relaxed);
+        self.move16.store(0, Ordering::Relaxed);
+        self.value16.store(0, Ordering::Relaxed);
+        self.eval16.store(0, Ordering::Relaxed);
     }
 
     fn read(&self) -> (u16, u8, u8, u16, i16, i16) {
-        let d = self.load_data();
-        let e = self.load_eval();
-
-        let key16 = d as u16;
-        let depth8 = (d >> 16) as u8;
-        let gen_bound8 = (d >> 24) as u8;
-        let move16 = (d >> 32) as u16;
-        let value16 = (d >> 48) as i16;
-
-        (key16, depth8, gen_bound8, move16, value16, e)
+        (
+            self.key16(),
+            self.depth8(),
+            self.gen_bound8(),
+            self.move16.load(Ordering::Relaxed),
+            self.value16.load(Ordering::Relaxed) as i16,
+            self.eval16.load(Ordering::Relaxed) as i16,
+        )
     }
 
     fn to_tt_data(&self) -> TTData {
@@ -126,19 +97,19 @@ impl TTEntry {
     }
 
     fn is_occupied(&self) -> bool {
-        (self.load_data() >> 16) as u8 != 0
+        self.depth8() != 0
     }
 
     fn key16(&self) -> u16 {
-        self.load_data() as u16
+        self.key16.load(Ordering::Relaxed)
     }
 
     fn depth8(&self) -> u8 {
-        (self.load_data() >> 16) as u8
+        self.depth8.load(Ordering::Relaxed)
     }
 
     fn gen_bound8(&self) -> u8 {
-        (self.load_data() >> 24) as u8
+        self.gen_bound8.load(Ordering::Relaxed)
     }
 
     fn relative_age(&self, curr_generation: u8) -> u8 {
@@ -159,18 +130,12 @@ impl TTEntry {
         curr_generation: u8,
     ) {
         let new_key16 = k as u16;
-        let old_data = self.load_data();
-        let old_key16 = old_data as u16;
+        let old_key16 = self.key16();
+        let old_depth8 = self.depth8();
 
-        let move16 = if m.raw() != 0 || new_key16 != old_key16 {
-            let move_mask = 0xffff_u64 << 32;
-            self.store_data((old_data & !move_mask) | (u64::from(m.raw()) << 32));
-            m.raw()
-        } else {
-            (old_data >> 32) as u16
-        };
-
-        let old_depth8 = (old_data >> 16) as u8;
+        if m.raw() != 0 || new_key16 != old_key16 {
+            self.move16.store(m.raw(), Ordering::Relaxed);
+        }
         let pv_u8 = u8::from(pv);
         let new_depth8 = (d - DEPTH_NONE) as u8;
 
@@ -181,14 +146,11 @@ impl TTEntry {
         {
             let gen_bound8 = curr_generation | ((b as u8) << BOUND_SHIFT) | (pv_u8 << PV_SHIFT);
 
-            let data = u64::from(new_key16)
-                | (u64::from(new_depth8) << 16)
-                | (u64::from(gen_bound8) << 24)
-                | (u64::from(move16) << 32)
-                | (u64::from(v as u16) << 48);
-
-            self.store_data(data);
-            self.store_eval(ev as i16);
+            self.key16.store(new_key16, Ordering::Relaxed);
+            self.depth8.store(new_depth8, Ordering::Relaxed);
+            self.gen_bound8.store(gen_bound8, Ordering::Relaxed);
+            self.value16.store(v as u16, Ordering::Relaxed);
+            self.eval16.store(ev as u16, Ordering::Relaxed);
         }
     }
 }
@@ -209,22 +171,28 @@ pub struct ProbeResult {
     pub writer: TTWriter,
 }
 
+/// A reusable slot selected by a transposition-table probe.
+///
+/// This handle owns no table memory and can safely outlive its table. Writing
+/// requires the original table explicitly; using another table or a table that
+/// has since been resized is rejected. It does not retain an `Arc` or borrow a
+/// worker across recursive searches.
 pub struct TTWriter {
-    entry_ptr: *const TTEntry,
+    table_id: usize,
+    slot: usize,
 }
 
-// SAFETY: TTEntry access is racy but safe (same model as Pikafish).
-#[allow(unsafe_code)]
-unsafe impl Send for TTWriter {}
-#[allow(unsafe_code)]
-unsafe impl Sync for TTWriter {}
-
 impl TTWriter {
+    /// Attempts to save data in the slot selected by the original probe.
+    ///
+    /// Returns `false` without writing if `table` is a different table or has
+    /// been resized since the probe. Returns `true` for a current handle; the
+    /// normal replacement policy still decides which entry fields to update.
     #[allow(clippy::many_single_char_names)]
     #[allow(clippy::too_many_arguments)]
-    #[allow(unsafe_code)]
     pub fn write(
         &self,
+        table: &TranspositionTable,
         k: Key,
         v: Value,
         pv: bool,
@@ -233,10 +201,16 @@ impl TTWriter {
         m: Move,
         ev: Value,
         generation: u8,
-    ) {
-        // SAFETY: The pointer is valid for the lifetime of the TT.
-        let entry = unsafe { &*self.entry_ptr };
+    ) -> bool {
+        if self.table_id != table.id {
+            return false;
+        }
+        let Some(cluster) = table.clusters.get(self.slot / CLUSTER_SIZE) else {
+            return false;
+        };
+        let entry = &cluster.entries[self.slot % CLUSTER_SIZE];
         entry.save(k, v, pv, b, d, m, ev, generation);
+        true
     }
 }
 
@@ -244,13 +218,19 @@ pub struct TranspositionTable {
     clusters: Vec<Cluster>,
     cluster_count: usize,
     generation8: AtomicU8,
+    id: usize,
 }
 
-// SAFETY: TTEntry uses UnsafeCell with racy access (same as Pikafish).
-#[allow(unsafe_code)]
-unsafe impl Send for TranspositionTable {}
-#[allow(unsafe_code)]
-unsafe impl Sync for TranspositionTable {}
+// Handles must not accidentally become valid again when an allocation address
+// is reused. IDs are assigned only when allocating/resizing a table; probing
+// and writing never touch this shared counter. Exhaustion fails before reuse.
+static NEXT_TABLE_ID: AtomicUsize = AtomicUsize::new(0);
+
+fn next_table_id() -> usize {
+    NEXT_TABLE_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("transposition table identity exhausted")
+}
 
 impl TranspositionTable {
     pub fn new(mb_size: usize) -> Self {
@@ -260,7 +240,7 @@ impl TranspositionTable {
         let mut clusters = Vec::with_capacity(cluster_count);
         for _ in 0..cluster_count {
             clusters.push(Cluster {
-                entries: [TTEntry::ZERO, TTEntry::ZERO, TTEntry::ZERO],
+                entries: [const { TTEntry::zero() }; CLUSTER_SIZE],
                 _padding: [0; 2],
             });
         }
@@ -269,10 +249,12 @@ impl TranspositionTable {
             clusters,
             cluster_count,
             generation8: AtomicU8::new(0),
+            id: next_table_id(),
         }
     }
 
     pub fn resize(&mut self, mb_size: usize) {
+        self.id = next_table_id();
         let cluster_count = (mb_size * 1024 * 1024) / size_of::<Cluster>();
         let cluster_count = cluster_count.max(1);
 
@@ -280,7 +262,7 @@ impl TranspositionTable {
         self.clusters.reserve(cluster_count);
         for _ in 0..cluster_count {
             self.clusters.push(Cluster {
-                entries: [TTEntry::ZERO, TTEntry::ZERO, TTEntry::ZERO],
+                entries: [const { TTEntry::zero() }; CLUSTER_SIZE],
                 _padding: [0; 2],
             });
         }
@@ -291,8 +273,7 @@ impl TranspositionTable {
     pub fn clear(&self) {
         for cluster in &self.clusters {
             for entry in &cluster.entries {
-                entry.store_data(0);
-                entry.store_eval(0);
+                entry.clear();
             }
         }
         self.generation8.store(0, Ordering::Relaxed);
@@ -309,22 +290,19 @@ impl TranspositionTable {
         self.generation8.load(Ordering::Relaxed)
     }
 
-    fn first_entry(&self, key: Key) -> &[TTEntry; CLUSTER_SIZE] {
-        let idx = mul_hi64(key, self.cluster_count as u64) as usize;
-        &self.clusters[idx].entries
-    }
-
     pub fn probe(&self, key: Key) -> ProbeResult {
-        let entries = self.first_entry(key);
+        let cluster_idx = mul_hi64(key, self.cluster_count as u64) as usize;
+        let entries = &self.clusters[cluster_idx].entries;
         let key16 = key as u16;
 
-        for entry in entries {
+        for (entry_idx, entry) in entries.iter().enumerate() {
             if entry.key16() == key16 {
                 return ProbeResult {
                     found: entry.is_occupied(),
                     data: entry.to_tt_data(),
                     writer: TTWriter {
-                        entry_ptr: std::ptr::from_ref(entry),
+                        table_id: self.id,
+                        slot: cluster_idx * CLUSTER_SIZE + entry_idx,
                     },
                 };
             }
@@ -347,7 +325,8 @@ impl TranspositionTable {
             found: false,
             data: TTData::EMPTY,
             writer: TTWriter {
-                entry_ptr: std::ptr::from_ref(&entries[replace_idx]),
+                table_id: self.id,
+                slot: cluster_idx * CLUSTER_SIZE + replace_idx,
             },
         }
     }
@@ -388,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tt_capacity_doubled() {
+    fn test_one_mebibyte_capacity() {
         let tt = TranspositionTable::new(1);
         assert_eq!(tt.cluster_count, 32768);
     }
@@ -431,7 +410,7 @@ mod tests {
         let result = tt.probe(key);
         result
             .writer
-            .write(key, 100, true, Bound::Exact, 5, m, 50, tt.generation());
+            .write(&tt, key, 100, true, Bound::Exact, 5, m, 50, tt.generation());
 
         let result2 = tt.probe(key);
         assert!(result2.found);
@@ -452,11 +431,11 @@ mod tests {
 
         let r = tt.probe(key);
         r.writer
-            .write(key, 10, false, Bound::Upper, 3, m1, 5, tt.generation());
+            .write(&tt, key, 10, false, Bound::Upper, 3, m1, 5, tt.generation());
 
         let r = tt.probe(key);
         r.writer
-            .write(key, 20, true, Bound::Exact, 8, m2, 15, tt.generation());
+            .write(&tt, key, 20, true, Bound::Exact, 8, m2, 15, tt.generation());
 
         let r = tt.probe(key);
         assert!(r.found);
@@ -473,12 +452,30 @@ mod tests {
         let m2 = Move::make(Square::SQ_B0, Square::SQ_B1);
 
         let r = tt.probe(key);
-        r.writer
-            .write(key, 10, false, Bound::Upper, 10, m1, 5, tt.generation());
+        r.writer.write(
+            &tt,
+            key,
+            10,
+            false,
+            Bound::Upper,
+            10,
+            m1,
+            5,
+            tt.generation(),
+        );
 
         let r = tt.probe(key);
-        r.writer
-            .write(key, 20, false, Bound::Upper, 1, m2, 15, tt.generation());
+        r.writer.write(
+            &tt,
+            key,
+            20,
+            false,
+            Bound::Upper,
+            1,
+            m2,
+            15,
+            tt.generation(),
+        );
 
         let r = tt.probe(key);
         assert!(r.found);
@@ -539,16 +536,190 @@ mod tests {
         let m2 = Move::make(Square::SQ_B0, Square::SQ_B1);
 
         let r = tt.probe(key1);
-        r.writer
-            .write(key1, 10, false, Bound::Lower, 3, m1, 5, tt.generation());
+        r.writer.write(
+            &tt,
+            key1,
+            10,
+            false,
+            Bound::Lower,
+            3,
+            m1,
+            5,
+            tt.generation(),
+        );
 
         let r = tt.probe(key2);
-        r.writer
-            .write(key2, 20, false, Bound::Upper, 5, m2, 15, tt.generation());
+        r.writer.write(
+            &tt,
+            key2,
+            20,
+            false,
+            Bound::Upper,
+            5,
+            m2,
+            15,
+            tt.generation(),
+        );
 
         let r1 = tt.probe(key1);
         if r1.found {
             assert_eq!(r1.data.value, 10);
         }
+    }
+
+    #[test]
+    fn test_writer_rejects_another_table() {
+        let original = TranspositionTable::new(0);
+        let other = TranspositionTable::new(0);
+        let key = 1;
+        let writer = original.probe(key).writer;
+
+        assert!(!writer.write(&other, key, 100, false, Bound::Exact, 5, Move::NONE, 50, 0));
+        assert!(!other.probe(key).found);
+        assert!(writer.write(
+            &original,
+            key,
+            100,
+            false,
+            Bound::Exact,
+            5,
+            Move::NONE,
+            50,
+            0
+        ));
+        assert!(original.probe(key).found);
+    }
+
+    #[test]
+    fn test_writer_can_outlive_its_table() {
+        let key = 1;
+        let writer = {
+            let original = TranspositionTable::new(0);
+            original.probe(key).writer
+        };
+        let replacement = TranspositionTable::new(0);
+
+        assert!(!writer.write(
+            &replacement,
+            key,
+            100,
+            false,
+            Bound::Exact,
+            5,
+            Move::NONE,
+            50,
+            0,
+        ));
+        assert!(!replacement.probe(key).found);
+    }
+
+    #[test]
+    fn test_resize_invalidates_writers_even_at_the_same_capacity() {
+        let mut tt = TranspositionTable::new(1);
+        let key = u64::MAX;
+        let writer = tt.probe(key).writer;
+        tt.resize(1);
+        assert!(!writer.write(&tt, key, 100, false, Bound::Exact, 5, Move::NONE, 50, 0));
+
+        let writer = tt.probe(key).writer;
+        tt.resize(0);
+        assert!(!writer.write(&tt, key, 100, false, Bound::Exact, 5, Move::NONE, 50, 0));
+        assert!(!tt.probe(key).found);
+        assert!(tt.probe(key).writer.write(
+            &tt,
+            key,
+            100,
+            false,
+            Bound::Exact,
+            5,
+            Move::NONE,
+            50,
+            0,
+        ));
+    }
+
+    #[test]
+    fn test_writer_survives_moving_its_table() {
+        let tt = TranspositionTable::new(0);
+        let key = 1;
+        let writer = tt.probe(key).writer;
+        let moved = Box::new(tt);
+
+        assert!(writer.write(&moved, key, 100, false, Bound::Exact, 5, Move::NONE, 50, 0));
+        assert_eq!(moved.probe(key).data.value, 100);
+    }
+
+    #[test]
+    fn test_retains_move_when_updating_without_one() {
+        let tt = TranspositionTable::new(0);
+        let key = 1;
+        let m = Move::make(Square::SQ_E0, Square::SQ_E1);
+        let writer = tt.probe(key).writer;
+
+        writer.write(&tt, key, 100, false, Bound::Lower, 10, m, 50, 0);
+        writer.write(&tt, key, -200, true, Bound::Exact, 1, Move::NONE, -100, 0);
+
+        let data = tt.probe(key).data;
+        assert_eq!(data.tt_move, m);
+        assert_eq!(data.value, -200);
+        assert_eq!(data.eval, -100);
+        assert_eq!(data.depth, 1);
+        assert!(data.is_pv);
+    }
+
+    #[test]
+    fn test_concurrent_probe_write_and_clear() {
+        const fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TranspositionTable>();
+        assert_send_sync::<TTWriter>();
+
+        // All writers contend for three slots. Readers may see mixed snapshots,
+        // but every observed field must be an intact value actually stored.
+        let tt = TranspositionTable::new(0);
+        let moves = [
+            Move::make(Square::SQ_A0, Square::SQ_A1),
+            Move::make(Square::SQ_B0, Square::SQ_B1),
+            Move::make(Square::SQ_C0, Square::SQ_C1),
+            Move::make(Square::SQ_D0, Square::SQ_D1),
+        ];
+        std::thread::scope(|scope| {
+            for (worker, &m) in moves.iter().enumerate() {
+                let tt = &tt;
+                let moves = &moves;
+                scope.spawn(move || {
+                    for _ in 0..2000 {
+                        let key = worker as u64 + 1;
+                        let value = 1000 + worker as i32;
+                        assert!(tt.probe(key).writer.write(
+                            tt,
+                            key,
+                            value,
+                            false,
+                            Bound::Exact,
+                            worker as i32 + 1,
+                            m,
+                            -value,
+                            0,
+                        ));
+                        let probe = tt.probe(key);
+                        if probe.found {
+                            let data = probe.data;
+                            assert!(data.tt_move == Move::NONE || moves.contains(&data.tt_move));
+                            assert!(data.value == 0 || (1000..=1003).contains(&data.value));
+                            assert!(data.eval == 0 || (-1003..=-1000).contains(&data.eval));
+                            assert!(data.depth == DEPTH_NONE || (1..=4).contains(&data.depth));
+                            assert!(matches!(data.bound, Bound::None | Bound::Exact));
+                        }
+                    }
+                });
+            }
+            scope.spawn(|| {
+                for _ in 0..2000 {
+                    tt.clear();
+                }
+            });
+        });
+        tt.clear();
+        assert!(!tt.probe(1).found);
     }
 }

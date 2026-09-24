@@ -28,17 +28,17 @@ async fn main() {
             max_engines: parse_env("PIKARUST_MAX_ENGINES", 8),
             threads_per_engine: parse_env("PIKARUST_THREADS_PER_ENGINE", 1),
             hash_mb_per_engine: parse_env("PIKARUST_HASH_MB", 16),
+            nnue_file: std::env::var_os("PIKARUST_NNUE_FILE").map(Into::into),
         },
         max_sessions: parse_env("PIKARUST_MAX_SESSIONS", 64),
         idle_timeout_secs: parse_env("PIKARUST_IDLE_TIMEOUT", 600),
     };
 
-    let state = create_app_state(&config);
-    let session_mgr = Arc::clone(&state.session_mgr);
-
-    tokio::spawn(run_cleanup_task(session_mgr, 60));
-
-    let router = build_router(state);
+    let (router, cleanup) = {
+        let state = create_app_state(&config);
+        let cleanup = tokio::spawn(run_cleanup_task(Arc::clone(&state.session_mgr), 60));
+        (build_router(state), cleanup)
+    };
 
     info!("PikaRust server listening on {}", config.bind_addr);
 
@@ -51,6 +51,8 @@ async fn main() {
         .await
         .expect("server error");
 
+    cleanup.abort();
+    let _ = cleanup.await;
     info!("Server shut down");
 }
 

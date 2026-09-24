@@ -1,8 +1,8 @@
 //! Targeted reproduction of the threat mismatch from bench position 8 diagnostic:
 //!
 //! ```text
-//! THREAT MISMATCH perspective=1 node=10119 path=incremental stack_size=1
-//!   prev_computed=[true,true] prev_diff=None cur_diff=DirtyThreats
+//! THREAT MISMATCH perspective=1 node=10119 path=incremental `stack_size=1`
+//!   prev_computed=[true,true] `prev_diff=None` cur_diff=`DirtyThreats`
 //!   fen=2bckab2/4a4/5n3/C4N2p/5r3/PR2P1B2/9/2n1B4/4A4/3AK1C2 w
 //! ```
 //!
@@ -13,9 +13,7 @@ use pikarust_core::nnue::feature_transformer::{
     evaluate_threat_side, refresh_threat_accumulator, update_threat_accumulator_incremental,
 };
 use pikarust_core::nnue::features::half_ka_v2_hm;
-use pikarust_core::nnue::{
-    Accumulator, AccumulatorStack, DiffType, DirtyThreats, Network, NnueModel,
-};
+use pikarust_core::nnue::{Accumulator, AccumulatorStack, DiffType, DirtyThreats};
 use pikarust_core::position::{GenType, Position, generate};
 use pikarust_core::types::Color;
 
@@ -24,19 +22,7 @@ const ROOT_FEN: &str = "2bckab2/4a4/5n3/CR3N2p/5r3/P3P1B2/9/2n1B4/4A4/3AK1C2 w";
 /// Board portion of the mismatch FEN (without side/counters).
 const MISMATCH_BOARD: &str = "2bckab2/4a4/5n3/C4N2p/5r3/PR2P1B2/9/2n1B4/4A4/3AK1C2";
 
-fn load_network() -> Option<Network> {
-    for p in &[
-        "../../models/pikafish.nnue",
-        "../models/pikafish.nnue",
-        "models/pikafish.nnue",
-    ] {
-        let path = std::path::Path::new(p);
-        if path.exists() {
-            return NnueModel::load(path).ok().map(Network::new);
-        }
-    }
-    None
-}
+mod common;
 
 fn fen_board(fen: &str) -> &str {
     fen.split_whitespace().next().unwrap_or("")
@@ -61,13 +47,10 @@ fn do_move_collect_threats(pos: &mut Position, m: pikarust_core::types::Move) ->
 }
 
 /// Test 1: For every legal move from root, compare incremental vs refresh.
-/// Reproduces the diagnostic scenario (stack_size=1, prev=root refresh).
+/// Reproduces the diagnostic scenario (`stack_size=1`, prev=root refresh).
 #[test]
 fn test_all_moves_from_root_incremental_vs_refresh() {
-    let Some(net) = load_network() else {
-        eprintln!("NNUE model not found, skipping");
-        return;
-    };
+    let net = common::network();
     let model = net.model();
     let simd = net.simd();
 
@@ -176,13 +159,10 @@ fn test_specific_mismatch_fen_reachable() {
 }
 
 /// Test 3: do a DIFFERENT move, undo it, then do the mismatch move.
-/// Checks whether do_move/undo_move corrupts position state affecting refresh.
+/// Checks whether `do_move`/`undo_move` corrupts position state affecting refresh.
 #[test]
 fn test_do_undo_different_move_then_mismatch_move() {
-    let Some(net) = load_network() else {
-        eprintln!("NNUE model not found, skipping");
-        return;
-    };
+    let net = common::network();
     let model = net.model();
     let simd = net.simd();
 
@@ -274,13 +254,10 @@ fn test_do_undo_different_move_then_mismatch_move() {
     );
 }
 
-/// Test 4: do_move_with_threats + undo preserves root accumulator.
+/// Test 4: `do_move_with_threats` + undo preserves root accumulator.
 #[test]
 fn test_do_move_with_threats_undo_preserves_root_acc() {
-    let Some(net) = load_network() else {
-        eprintln!("NNUE model not found, skipping");
-        return;
-    };
+    let net = common::network();
     let model = net.model();
     let simd = net.simd();
 
@@ -306,15 +283,12 @@ fn test_do_move_with_threats_undo_preserves_root_acc() {
     }
 }
 
-/// Test 5: Stack-based incremental using evaluate_threat_side (the actual search path).
-/// The diagnostic shows stack_size=1 with prev_diff=None, which means the search uses
-/// evaluate_threat_side to walk the stack. This tests that path.
+/// Test 5: Stack-based incremental using `evaluate_threat_side` (the actual search path).
+/// The diagnostic shows `stack_size=1` with `prev_diff=None`, which means the search uses
+/// `evaluate_threat_side` to walk the stack. This tests that path.
 #[test]
 fn test_evaluate_threat_side_from_root() {
-    let Some(net) = load_network() else {
-        eprintln!("NNUE model not found, skipping");
-        return;
-    };
+    let net = common::network();
     let model = net.model();
     let simd = net.simd();
 
@@ -376,10 +350,7 @@ fn test_evaluate_threat_side_from_root() {
 /// when the first move is NOT the mismatch move.
 #[test]
 fn test_2ply_from_root_all_moves() {
-    let Some(net) = load_network() else {
-        eprintln!("NNUE model not found, skipping");
-        return;
-    };
+    let net = common::network();
     let model = net.model();
     let simd = net.simd();
 

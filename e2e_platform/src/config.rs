@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Central configuration for the E2E platform.
+#[derive(Clone)]
 pub struct E2eConfig {
     /// Path to the `PikaRust` binary.
     pub pikarust_bin: PathBuf,
@@ -19,8 +20,12 @@ pub struct E2eConfig {
     pub search_timeout: Duration,
     /// Maximum full moves per game before declaring draw.
     pub max_game_moves: u32,
-    /// Search depth for equivalence tests.
-    pub equiv_depth: u32,
+    /// Fixed-node budget for search diagnostics.
+    pub comparison_nodes: u64,
+    /// Optional previous `PikaRust` build for strength regression games.
+    pub baseline_bin: Option<PathBuf>,
+    /// Working directory for the baseline engine.
+    pub baseline_cwd: PathBuf,
     /// Search depth for self-play.
     pub self_play_depth: u32,
     /// Search depth for cross-engine play.
@@ -30,16 +35,27 @@ pub struct E2eConfig {
 impl E2eConfig {
     /// Build config from the project root path.
     pub fn from_project_root(root: &Path) -> Self {
+        let reference_dir = std::env::var_os("PIKAFISH_OUTPUT_DIR")
+            .filter(|path| !path.is_empty())
+            .map_or_else(
+                || root.join("tests/fixtures/pikafish"),
+                |path| root.join(path),
+            );
         Self {
-            pikarust_bin: root.join("target/release/pikarust"),
+            pikarust_bin: std::env::var_os("PIKARUST_BIN")
+                .map_or_else(|| root.join("target/release/pikarust"), PathBuf::from),
             pikarust_cwd: root.to_path_buf(),
-            pikafish_bin: root.join("tests/fixtures/pikafish/bin/pikafish"),
-            pikafish_cwd: root.join("tests/fixtures/pikafish/bin"),
-            nnue_model: root.join("models/pikafish.nnue"),
+            pikafish_bin: reference_dir.join("bin/pikafish"),
+            pikafish_cwd: reference_dir.join("bin"),
+            nnue_model: std::env::var_os("PIKARUST_NNUE_MODEL")
+                .map_or_else(|| root.join("models/pikafish.nnue"), PathBuf::from),
             default_timeout: Duration::from_secs(10),
             search_timeout: Duration::from_secs(60),
             max_game_moves: 200,
-            equiv_depth: 8,
+            comparison_nodes: 10_000,
+            baseline_bin: std::env::var_os("PIKARUST_BASELINE_BIN").map(PathBuf::from),
+            baseline_cwd: std::env::var_os("PIKARUST_BASELINE_CWD")
+                .map_or_else(|| root.to_path_buf(), PathBuf::from),
             self_play_depth: 6,
             cross_engine_depth: 8,
         }

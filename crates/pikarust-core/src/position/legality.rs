@@ -107,6 +107,28 @@ impl Position {
         }
     }
 
+    /// Validate a move from an application or protocol boundary.
+    ///
+    /// Checks the encoding, piece movement, side to move, and king safety.
+    /// Unlike [`Self::is_legal`], this accepts arbitrary raw move encodings and
+    /// returns `false` for invalid input, including null and sentinel moves.
+    pub fn is_legal_move(&self, m: crate::types::Move) -> bool {
+        let raw = m.raw();
+        if raw >> 14 != 0
+            || usize::from((raw >> 7) & 0x7f) >= Square::NUM
+            || usize::from(raw & 0x7f) >= Square::NUM
+            || !m.is_ok()
+            || m.from_sq() == m.to_sq()
+        {
+            return false;
+        }
+        self.pseudo_legal(m) && self.is_legal(m)
+    }
+
+    /// Check king safety for a move already known to be pseudo-legal.
+    ///
+    /// This search fast path assumes valid squares and piece movement. Use
+    /// [`Self::is_legal_move`] for moves received from callers or a protocol.
     pub fn is_legal(&self, m: crate::types::Move) -> bool {
         let us = self.side_to_move;
         let from = m.from_sq();
@@ -368,6 +390,27 @@ impl Position {
 mod tests {
     use crate::position::Position;
     use crate::types::{Move, Square};
+
+    #[test]
+    fn boundary_validator_handles_every_raw_move_encoding() {
+        let pos = Position::from_fen(
+            "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1",
+        )
+        .unwrap();
+        let legal: std::collections::HashSet<_> =
+            crate::position::generate(&pos, crate::position::GenType::Legal)
+                .as_slice()
+                .iter()
+                .map(|mv| mv.raw())
+                .collect();
+        for raw in 0..=u16::MAX {
+            assert_eq!(
+                pos.is_legal_move(Move::from_raw(raw)),
+                legal.contains(&raw),
+                "raw={raw}"
+            );
+        }
+    }
 
     #[test]
     fn advisor_does_not_attack_outside_palace_square() {

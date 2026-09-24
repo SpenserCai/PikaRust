@@ -35,6 +35,9 @@ impl ButterflyHistory {
         unsafe {
             let ptr = std::alloc::alloc_zeroed(layout)
                 .cast::<[[i16; UINT_16_HISTORY_SIZE]; Color::NUM]>();
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
             Self {
                 table: Box::from_raw(ptr),
             }
@@ -95,6 +98,9 @@ impl LowPlyHistory {
         unsafe {
             let ptr = std::alloc::alloc_zeroed(layout)
                 .cast::<[[i16; UINT_16_HISTORY_SIZE]; LOW_PLY_HISTORY_SIZE]>();
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
             Self {
                 table: Box::from_raw(ptr),
             }
@@ -154,6 +160,9 @@ impl CapturePieceToHistory {
         unsafe {
             let ptr = std::alloc::alloc_zeroed(layout)
                 .cast::<[[[i16; PieceType::PIECE_TYPE_NB]; Square::NUM]; Piece::NUM]>();
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
             Self {
                 table: Box::from_raw(ptr),
             }
@@ -171,6 +180,12 @@ impl CapturePieceToHistory {
     #[inline]
     pub fn get(&self, pc: Piece, to: Square, captured_pt: PieceType) -> i16 {
         self.table[pc.index()][to.index()][captured_pt.index()]
+    }
+
+    /// Include the no-capture bucket used when pruning quiet checking moves.
+    #[inline]
+    pub fn get_for_capture(&self, pc: Piece, to: Square, captured: Piece) -> i16 {
+        self.table[pc.index()][to.index()][(captured.raw() & 7) as usize]
     }
 
     #[inline]
@@ -575,7 +590,7 @@ impl ContinuationCorrectionHistory {
     }
 
     #[inline]
-    pub fn get(&self, pc: Piece, sq: Square) -> &PieceToCorrHist {
+    pub const fn get(&self, pc: Piece, sq: Square) -> &PieceToCorrHist {
         &self.table[pc.index()][sq.index()]
     }
 
@@ -677,4 +692,32 @@ impl ContHistIndex {
         pc: Piece::NONE,
         sq: Square::SQ_A0,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quiet_checks_use_the_no_capture_history_bucket() {
+        let mut history = CapturePieceToHistory::new();
+        history.fill(-607);
+        assert_eq!(
+            history.get_for_capture(Piece::W_ROOK, Square::SQ_E5, Piece::NONE),
+            -607
+        );
+        assert_eq!(
+            history.get_for_capture(Piece::W_ROOK, Square::SQ_E5, Piece::B_KNIGHT),
+            -607
+        );
+        history.update(Piece::W_ROOK, Square::SQ_E5, PieceType::Knight, 500);
+        assert_ne!(
+            history.get_for_capture(Piece::W_ROOK, Square::SQ_E5, Piece::B_KNIGHT),
+            -607
+        );
+        assert_eq!(
+            history.get_for_capture(Piece::W_ROOK, Square::SQ_E5, Piece::NONE),
+            -607
+        );
+    }
 }

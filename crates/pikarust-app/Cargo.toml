@@ -6,6 +6,9 @@ version.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "pikarust"
@@ -14,19 +17,24 @@ path = "src/bin/pikarust.rs"
 [[bin]]
 name = "pikarust-server"
 path = "src/bin/pikarust-server.rs"
+required-features = ["server"]
+
+[features]
+default = []
+server = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:serde", "dep:serde_json", "dep:dashmap", "dep:futures-util"]
 
 [dependencies]
 pikarust-core = { workspace = true }
 uci-rs = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-tokio = { workspace = true }
-axum = { workspace = true }
-tower-http = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-dashmap = { workspace = true }
-futures-util = { workspace = true }
+tokio = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 

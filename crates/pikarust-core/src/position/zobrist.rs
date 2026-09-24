@@ -49,8 +49,8 @@ fn init_zobrist() -> ZobristKeys {
     ];
 
     for pc in pieces {
-        for sq_idx in 0..Square::NUM {
-            psq[pc.index()][sq_idx] = rng.rand64();
+        for key in &mut psq[pc.index()] {
+            *key = rng.rand64();
         }
     }
 

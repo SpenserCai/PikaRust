@@ -71,3 +71,17 @@ pub async fn run_cleanup_task(session_mgr: SharedSessionManager, interval_secs: 
         Box::pin(session_mgr.cleanup_idle()).await;
     }
 }
+
+/// Polling keeps ownership in the requesting task: aborting an HTTP/WS request
+/// drops the handle and cancels its search instead of detaching a blocking job.
+async fn wait_for_search(
+    handle: pikarust_core::engine::SearchHandle,
+) -> Result<pikarust_core::engine::SearchResult, pikarust_core::engine::EngineError> {
+    let mut interval = tokio::time::interval(Duration::from_millis(5));
+    loop {
+        if let Some(result) = handle.try_result()? {
+            return Ok(result);
+        }
+        interval.tick().await;
+    }
+}

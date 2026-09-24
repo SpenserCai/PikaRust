@@ -1,62 +1,50 @@
-# ===== Rust =====
-/target/
+# Rust build output; the workspace lockfile is committed.
+**/target/
 **/*.rs.bk
-Cargo.lock
 
-# ===== Node / Frontend =====
+# Frontend dependencies and generated bundles.
 node_modules/
 dist/
 .vite/
 *.tsbuildinfo
-src/**/*.js
 
-# ===== Python =====
+# Reference builds and local diagnostics.
+tests/fixtures/pikafish/
+tmps/
+refs/
+dev_docs/
+
+# Python tooling.
 venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
 
-# ===== Tauri =====
-src-tauri/target/
-src-tauri/gen/
-
-# ===== macOS =====
+# Editor and operating-system files.
 .DS_Store
 ._*
 .Spotlight-V100
 .Trashes
 *.swp
-
-# ===== IDE =====
 .idea/
 .vscode/
 *.iml
 
-# ===== Project specific =====
-tmps/
+# Local agent configuration and private application state.
 .kiro/
-refs/
-scripts/sync-private.sh
-tests/fixtures/pikafish/
-
-# ===== Secrets =====
-secrets.toml
-*.pem
-*.key
-.env.apple-signing
-node_modules/
-dist/
-target/
-Cargo.lock
-jstclaw_data
 .claude/
+.cargo/
 CLAUDE.local.md
 CLAUDE.md
 .mcp.json
-.cargo/
+jstclaw_data/
+scripts/sync-private.sh
 
-dev_docs/
-
-# ===== E2E Platform =====
-e2e_platform/target/
+# Credentials and local environment settings.
+secrets.toml
+*.pem
+*.key
+.env
+.env.*
+!.env.example

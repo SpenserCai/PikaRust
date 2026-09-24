@@ -6,6 +6,17 @@ pub mod scalar;
 
 pub const MAX_NNZ: usize = super::model::TRANSFORMED_DIMS / 4;
 
+/// NNUE arithmetic with identical slice contracts across backends.
+///
+/// Vector operations require equal lengths and use wrapping integer arithmetic.
+/// Feature transforms require two 1024-element accumulators and at least 512
+/// output bytes. Activation output must cover the input; ordinary `ReLU` accepts
+/// shifts below 32, and squared `ReLU` accepts shifts up to 28.
+///
+/// Affine operations require complete input-major weight matrices and enough
+/// biases/output for `out_dim`. Sparse block indices must refer to input blocks
+/// of four bytes. `find_nnz` requires complete blocks and at most `MAX_NNZ`
+/// blocks. Violating these shape contracts panics before writing output.
 pub trait SimdOps {
     fn vec_add_i16(a: &mut [i16], b: &[i16]);
     fn vec_sub_i16(a: &mut [i16], b: &[i16]);
@@ -54,6 +65,19 @@ pub enum SimdBackend {
     Avx2,
 }
 
+impl SimdBackend {
+    /// Whether this CPU can safely execute the backend's instructions.
+    pub fn is_supported(self) -> bool {
+        match self {
+            Self::Scalar => true,
+            #[cfg(target_arch = "aarch64")]
+            Self::Neon => std::arch::is_aarch64_feature_detected!("neon"),
+            #[cfg(target_arch = "x86_64")]
+            Self::Avx2 => is_x86_feature_detected!("avx2"),
+        }
+    }
+}
+
 impl std::fmt::Display for SimdBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -75,22 +99,27 @@ pub fn detect_backend() -> SimdBackend {
 
     if cfg!(feature = "simd-neon") {
         #[cfg(target_arch = "aarch64")]
-        return SimdBackend::Neon;
-        #[cfg(not(target_arch = "aarch64"))]
+        if SimdBackend::Neon.is_supported() {
+            return SimdBackend::Neon;
+        }
         return SimdBackend::Scalar;
     }
 
     if cfg!(feature = "simd-avx2") {
         #[cfg(target_arch = "x86_64")]
-        return SimdBackend::Avx2;
-        #[cfg(not(target_arch = "x86_64"))]
+        if SimdBackend::Avx2.is_supported() {
+            return SimdBackend::Avx2;
+        }
         return SimdBackend::Scalar;
     }
 
     // simd-auto: runtime detection
     #[cfg(target_arch = "aarch64")]
     {
-        SimdBackend::Neon
+        if SimdBackend::Neon.is_supported() {
+            return SimdBackend::Neon;
+        }
+        SimdBackend::Scalar
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -117,6 +146,7 @@ macro_rules! dispatch {
     };
 }
 
+/// CPU-checked NNUE operations with the input contracts documented by [`SimdOps`].
 pub struct Dispatch {
     backend: SimdBackend,
 }
@@ -128,7 +158,16 @@ impl Dispatch {
         }
     }
 
-    pub const fn with_backend(backend: SimdBackend) -> Self {
+    /// Selects an explicit backend.
+    ///
+    /// # Panics
+    /// Panics if the current CPU does not support `backend`. Use [`Self::new`]
+    /// to select an available backend automatically.
+    pub fn with_backend(backend: SimdBackend) -> Self {
+        assert!(
+            backend.is_supported(),
+            "unsupported SIMD backend: {backend}"
+        );
         Self { backend }
     }
 
@@ -248,9 +287,62 @@ impl Default for Dispatch {
     }
 }
 
+fn validate_affine_dimensions(
+    input: &[u8],
+    weights: &[i8],
+    biases: &[i32],
+    output: &[i32],
+    in_dim: usize,
+    out_dim: usize,
+) {
+    let weight_count = in_dim
+        .checked_mul(out_dim)
+        .expect("affine matrix dimensions overflow");
+    assert!(input.len() >= in_dim, "affine input is too short");
+    assert!(
+        weights.len() >= weight_count,
+        "affine weights are too short"
+    );
+    assert!(biases.len() >= out_dim, "affine biases are too short");
+    assert!(output.len() >= out_dim, "affine output is too short");
+}
+
+fn validate_sparse_indices(input_len: usize, nnz_indices: &[usize]) {
+    let blocks = input_len.div_ceil(4);
+    assert!(
+        nnz_indices.iter().all(|&index| index < blocks),
+        "sparse block index is outside the input"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn supported_dispatches() -> Vec<Dispatch> {
+        [
+            SimdBackend::Scalar,
+            #[cfg(target_arch = "x86_64")]
+            SimdBackend::Avx2,
+            #[cfg(target_arch = "aarch64")]
+            SimdBackend::Neon,
+        ]
+        .into_iter()
+        .filter(|backend| backend.is_supported())
+        .map(Dispatch::with_backend)
+        .collect()
+    }
+
+    fn assert_rejects_unchanged<T: Copy + Eq + std::fmt::Debug>(
+        output: &mut [T],
+        operation: impl FnOnce(&mut [T]),
+    ) {
+        let original = output.to_vec();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(output))).is_err()
+        );
+        assert_eq!(output, original);
+    }
 
     #[test]
     fn test_detect_backend() {
@@ -258,10 +350,7 @@ mod tests {
         #[cfg(feature = "simd-none")]
         assert_eq!(backend, SimdBackend::Scalar);
 
-        #[cfg(all(feature = "simd-auto", target_arch = "aarch64"))]
-        assert_eq!(backend, SimdBackend::Neon);
-
-        let _ = backend;
+        assert!(backend.is_supported());
     }
 
     #[test]
@@ -353,5 +442,161 @@ mod tests {
         let d = Dispatch::new();
         let s = format!("{}", d.backend());
         assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn explicit_backend_requires_cpu_support() {
+        let backends = [
+            SimdBackend::Scalar,
+            #[cfg(target_arch = "x86_64")]
+            SimdBackend::Avx2,
+            #[cfg(target_arch = "aarch64")]
+            SimdBackend::Neon,
+        ];
+        for backend in backends {
+            let result = std::panic::catch_unwind(|| Dispatch::with_backend(backend));
+            assert_eq!(result.is_ok(), backend.is_supported());
+        }
+    }
+
+    #[test]
+    fn invalid_vector_shapes_panic_before_writing() {
+        for d in supported_dispatches() {
+            let mut a16 = [42_i16; 33];
+            let mut a32 = [42_i32; 33];
+            assert_rejects_unchanged(&mut a16, |a| d.vec_add_i16(a, &[]));
+            assert_rejects_unchanged(&mut a16, |a| d.vec_sub_i16(a, &[]));
+            assert_rejects_unchanged(&mut a32, |a| d.vec_add_i32(a, &[]));
+            assert_rejects_unchanged(&mut a32, |a| d.vec_sub_i32(a, &[]));
+            assert_rejects_unchanged(&mut a16, |a| d.vec_add_i16_widening(a, &[]));
+            assert_rejects_unchanged(&mut a16, |a| d.vec_sub_i16_widening(a, &[]));
+        }
+    }
+
+    #[test]
+    fn invalid_transform_and_activation_shapes_panic_before_writing() {
+        for d in supported_dispatches() {
+            let mut output = [42_u8; 512];
+            assert_rejects_unchanged(&mut output, |out| {
+                d.transform_features(&[0; 1023], &[0; 1024], out);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.transform_features(&[0; 1024], &[0; 1023], out);
+            });
+            assert_rejects_unchanged(&mut output[..511], |out| {
+                d.transform_features(&[0; 1024], &[0; 1024], out);
+            });
+            assert_rejects_unchanged(&mut output[..31], |out| d.clipped_relu(&[64; 32], out, 6));
+            assert_rejects_unchanged(&mut output[..31], |out| {
+                d.sqr_clipped_relu(&[64; 32], out, 6);
+            });
+            assert_rejects_unchanged(&mut output, |out| d.clipped_relu(&[64; 32], out, 32));
+            assert_rejects_unchanged(&mut output, |out| d.sqr_clipped_relu(&[64; 32], out, 29));
+        }
+    }
+
+    #[test]
+    fn invalid_affine_shapes_panic_before_writing() {
+        for d in supported_dispatches() {
+            let mut output = [42_i32; 16];
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate(&[1; 4], &[1; 63], &[0; 16], out, 4, 16);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate(&[1; 3], &[1; 64], &[0; 16], out, 4, 16);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate(&[1; 4], &[1; 64], &[0; 15], out, 4, 16);
+            });
+            assert_rejects_unchanged(&mut output[..15], |out| {
+                d.affine_propagate(&[1; 4], &[1; 64], &[0; 16], out, 4, 16);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate(&[], &[], &[], out, usize::MAX, 16);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate_sparse(&[1; 4], &[1; 63], &[0; 16], out, 16, &[0]);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate_sparse(&[1; 4], &[1; 64], &[0; 16], out, 16, &[1]);
+            });
+            assert_rejects_unchanged(&mut output, |out| {
+                d.affine_propagate_sparse(&[1; 4], &[1; 64], &[0; 16], out, 16, &[usize::MAX]);
+            });
+        }
+    }
+
+    #[test]
+    fn invalid_nnz_input_is_rejected() {
+        for d in supported_dispatches() {
+            let mut indices = [0; MAX_NNZ];
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    d.find_nnz(&[1; MAX_NNZ * 4 + 4], &mut indices)
+                }))
+                .is_err()
+            );
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    d.find_nnz(&[1; 3], &mut indices)
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_unaligned_vectors_and_wrapping_tails() {
+        for d in supported_dispatches() {
+            for len in [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+                let mut actual = vec![i16::MAX; len + 2];
+                let mut expected = actual.clone();
+                let weights = vec![1_i8; len + 2];
+                d.vec_add_i16_widening(&mut actual[1..=len], &weights[1..=len]);
+                scalar::Scalar::vec_add_i16_widening(&mut expected[1..=len], &weights[1..=len]);
+                assert_eq!(actual, expected, "{} length {len}", d.backend());
+                d.vec_sub_i16_widening(&mut actual[1..=len], &weights[1..=len]);
+                scalar::Scalar::vec_sub_i16_widening(&mut expected[1..=len], &weights[1..=len]);
+                assert_eq!(actual, expected, "{} length {len}", d.backend());
+                let data = vec![i32::MAX; len + 2];
+                assert_eq!(
+                    d.horizontal_sum_i32(&data[1..=len]),
+                    scalar::Scalar::horizontal_sum_i32(&data[1..=len])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_activation_shifts() {
+        let input: Vec<_> = (0..65).map(|i| i * 811 - 16384).collect();
+        for d in supported_dispatches() {
+            for shift in [0, 1, 6, 12, 28] {
+                let mut actual = [42; 67];
+                let mut expected = actual;
+                d.clipped_relu(&input, &mut actual[1..66], shift);
+                scalar::Scalar::clipped_relu(&input, &mut expected[1..66], shift);
+                assert_eq!(actual, expected, "{} shift {shift}", d.backend());
+                d.sqr_clipped_relu(&input, &mut actual[1..66], shift);
+                scalar::Scalar::sqr_clipped_relu(&input, &mut expected[1..66], shift);
+                assert_eq!(actual, expected, "{} shift {shift}", d.backend());
+            }
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_extreme_feature_sums() {
+        let values = [i16::MIN, i16::MAX, -100, 0, 100, 255];
+        let psq: Vec<_> = (0..1024).map(|i| values[i % values.len()]).collect();
+        let threat: Vec<_> = (0..1024)
+            .map(|i| values[(i / values.len()) % values.len()])
+            .collect();
+        let mut expected = [0; 512];
+        scalar::Scalar::transform_features(&psq, &threat, &mut expected);
+        for d in supported_dispatches() {
+            let mut actual = [0; 512];
+            d.transform_features(&psq, &threat, &mut actual);
+            assert_eq!(actual, expected, "{}", d.backend());
+        }
     }
 }

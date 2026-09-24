@@ -7,12 +7,12 @@ pub struct Neon;
 
 impl SimdOps for Neon {
     fn vec_add_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
         let remainder = chunks * 8;
 
-        // SAFETY: NEON is always available on aarch64. Pointers are valid for
+        // SAFETY: Dispatch verifies NEON support. Pointers are valid for
         // the slice lengths and we process only complete 8-element chunks.
         unsafe {
             let a_ptr = a.as_mut_ptr();
@@ -31,12 +31,12 @@ impl SimdOps for Neon {
     }
 
     fn vec_sub_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 8;
         let remainder = chunks * 8;
 
-        // SAFETY: NEON is always available on aarch64. Pointers are valid for
+        // SAFETY: Dispatch verifies NEON support. Pointers are valid for
         // the slice lengths and we process only complete 8-element chunks.
         unsafe {
             let a_ptr = a.as_mut_ptr();
@@ -55,10 +55,11 @@ impl SimdOps for Neon {
     }
 
     fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
 
-        // SAFETY: NEON is always available on aarch64. We process 16 elements
+        // SAFETY: Dispatch verifies NEON support. We process 16 elements
         // per iteration: load 16×i8, widening-add to two 8×i16 vectors.
         unsafe {
             let acc_ptr = acc.as_mut_ptr();
@@ -74,11 +75,12 @@ impl SimdOps for Neon {
         }
 
         for i in (chunks * 16)..len {
-            acc[i] += i16::from(weights[i]);
+            acc[i] = acc[i].wrapping_add(i16::from(weights[i]));
         }
     }
 
     fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         let len = acc.len().min(weights.len());
         let chunks = len / 16;
 
@@ -97,17 +99,17 @@ impl SimdOps for Neon {
         }
 
         for i in (chunks * 16)..len {
-            acc[i] -= i16::from(weights[i]);
+            acc[i] = acc[i].wrapping_sub(i16::from(weights[i]));
         }
     }
 
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 4;
         let remainder = chunks * 4;
 
-        // SAFETY: NEON is always available on aarch64. Pointers are valid.
+        // SAFETY: Dispatch verifies NEON support. Pointers are valid.
         unsafe {
             let a_ptr = a.as_mut_ptr();
             let b_ptr = b.as_ptr();
@@ -125,12 +127,12 @@ impl SimdOps for Neon {
     }
 
     fn vec_sub_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         let len = a.len();
         let chunks = len / 4;
         let remainder = chunks * 4;
 
-        // SAFETY: NEON is always available on aarch64. Pointers are valid.
+        // SAFETY: Dispatch verifies NEON support. Pointers are valid.
         unsafe {
             let a_ptr = a.as_mut_ptr();
             let b_ptr = b.as_ptr();
@@ -148,11 +150,11 @@ impl SimdOps for Neon {
     }
 
     fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]) {
-        debug_assert_eq!(psq_acc.len(), 1024);
-        debug_assert_eq!(threat_acc.len(), 1024);
-        debug_assert!(output.len() >= 512);
+        assert_eq!(psq_acc.len(), 1024);
+        assert_eq!(threat_acc.len(), 1024);
+        assert!(output.len() >= 512);
 
-        // SAFETY: NEON is always available on aarch64. All pointer accesses are
+        // SAFETY: Dispatch verifies NEON support. All pointer accesses are
         // within the validated slice bounds (512 i16 pairs -> 512 u8 outputs).
         unsafe {
             let psq_ptr = psq_acc.as_ptr();
@@ -166,12 +168,12 @@ impl SimdOps for Neon {
             while j + 8 <= 512 {
                 let p0 = vld1q_s16(psq_ptr.add(j));
                 let t0 = vld1q_s16(threat_ptr.add(j));
-                let sum0 = vaddq_s16(p0, t0);
+                let sum0 = vqaddq_s16(p0, t0);
                 let clamped0 = vminq_s16(vmaxq_s16(sum0, zero), max_val);
 
                 let p1 = vld1q_s16(psq_ptr.add(j + 512));
                 let t1 = vld1q_s16(threat_ptr.add(j + 512));
-                let sum1 = vaddq_s16(p1, t1);
+                let sum1 = vqaddq_s16(p1, t1);
                 let clamped1 = vminq_s16(vmaxq_s16(sum1, zero), max_val);
 
                 let c0_lo = vget_low_s16(clamped0);
@@ -203,12 +205,20 @@ impl SimdOps for Neon {
     }
 
     fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        debug_assert_eq!(shift, 6);
+        assert!(
+            output.len() >= input.len(),
+            "activation output is too short"
+        );
+        assert!(shift < 32, "activation shift must be below 32");
+        if shift != 6 {
+            super::scalar::Scalar::clipped_relu(input, output, shift);
+            return;
+        }
         let len = input.len();
         let chunks = len / 16;
         let remainder = chunks * 16;
 
-        // SAFETY: NEON is always available on aarch64. We process 16 i32 elements
+        // SAFETY: Dispatch verifies NEON support. We process 16 i32 elements
         // at a time, narrowing to 16 u8 values. All accesses are within bounds.
         unsafe {
             let in_ptr = input.as_ptr();
@@ -249,18 +259,7 @@ impl SimdOps for Neon {
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
-        debug_assert_eq!(shift, 6);
-        let len = input.len();
-
-        // Scalar formula: (v * v) >> (2*shift + 7) = (v * v) >> 19, clamped to [0, 127]
-        // We use scalar code to match Pikafish's NEON path exactly (no SIMD for
-        // sqr_clipped_relu on ARM in Pikafish). This avoids i32 overflow issues
-        // that would require i64 multiplication.
-
-        for i in 0..len {
-            let v = i64::from(input[i]);
-            output[i] = ((v * v) >> 19).min(127) as u8;
-        }
+        super::scalar::Scalar::sqr_clipped_relu(input, output, shift);
     }
 
     fn affine_propagate(
@@ -271,12 +270,13 @@ impl SimdOps for Neon {
         in_dim: usize,
         out_dim: usize,
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, in_dim, out_dim);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         if out_dim >= 16 {
             let out_chunks = out_dim / 16;
 
-            // SAFETY: NEON is always available on aarch64. We process 16 output
+            // SAFETY: Dispatch verifies NEON support. We process 16 output
             // elements at a time. For each non-zero input, we broadcast the input
             // value, widen 16 weight bytes to i16, multiply, widen to i32, and
             // accumulate. All pointer arithmetic stays within slice bounds.
@@ -323,7 +323,8 @@ impl SimdOps for Neon {
                 }
                 let in_val = i32::from(input[i]);
                 for o in simd_end..out_dim {
-                    output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                    output[o] =
+                        output[o].wrapping_add(in_val * i32::from(weights[i * out_dim + o]));
                 }
             }
         } else {
@@ -333,7 +334,8 @@ impl SimdOps for Neon {
                 }
                 let in_val = i32::from(input[i]);
                 for o in 0..out_dim {
-                    output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                    output[o] =
+                        output[o].wrapping_add(in_val * i32::from(weights[i * out_dim + o]));
                 }
             }
         }
@@ -343,7 +345,7 @@ impl SimdOps for Neon {
         let len = data.len();
         let chunks = len / 4;
         let remainder = chunks * 4;
-        // SAFETY: NEON is always available on aarch64. We load 4 i32 at a time
+        // SAFETY: Dispatch verifies NEON support. We load 4 i32 at a time
         // and reduce with vaddvq_s32. All accesses are within bounds.
         let mut sum: i32 = unsafe {
             let ptr = data.as_ptr();
@@ -362,8 +364,9 @@ impl SimdOps for Neon {
     }
 
     fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
+        assert_eq!(input.len() % 4, 0, "NNZ input must contain complete blocks");
         let chunks = input.len() / 4;
-        debug_assert!(chunks <= super::MAX_NNZ);
+        assert!(chunks <= super::MAX_NNZ);
         let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
@@ -389,12 +392,14 @@ impl SimdOps for Neon {
         out_dim: usize,
         nnz_indices: &[usize],
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, input.len(), out_dim);
+        super::validate_sparse_indices(input.len(), nnz_indices);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         if out_dim >= 16 {
             let out_chunks = out_dim / 16;
 
-            // SAFETY: NEON is always available on aarch64. Same pattern as
+            // SAFETY: Dispatch verifies NEON support. Same pattern as
             // affine_propagate but only visiting non-zero input blocks.
             unsafe {
                 let out_ptr = output.as_mut_ptr();
@@ -452,7 +457,8 @@ impl SimdOps for Neon {
                     }
                     let in_val = i32::from(input[idx]);
                     for o in simd_end..out_dim {
-                        output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                        output[o] =
+                            output[o].wrapping_add(in_val * i32::from(weights[idx * out_dim + o]));
                     }
                 }
             }
@@ -469,7 +475,8 @@ impl SimdOps for Neon {
                     }
                     let in_val = i32::from(input[idx]);
                     for o in 0..out_dim {
-                        output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                        output[o] =
+                            output[o].wrapping_add(in_val * i32::from(weights[idx * out_dim + o]));
                     }
                 }
             }

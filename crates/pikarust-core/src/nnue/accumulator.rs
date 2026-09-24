@@ -145,18 +145,13 @@ impl Default for DirtyThreats {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[allow(clippy::large_enum_variant)]
 pub enum DiffType {
+    #[default]
     None,
     DirtyPiece(DirtyPiece),
     DirtyThreats(DirtyThreats),
-}
-
-impl Default for DiffType {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Clone)]

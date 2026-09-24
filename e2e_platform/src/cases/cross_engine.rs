@@ -33,6 +33,7 @@ impl TestCase for CrossEngineTest {
             max_moves: config.max_game_moves,
             response_timeout: config.search_timeout,
             hash_mb: 16,
+            nnue_model: Some(config.nnue_model.clone()),
             start_fen: None,
         };
 

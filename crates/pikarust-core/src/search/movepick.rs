@@ -68,34 +68,23 @@ pub struct MovePicker {
     end_bad_quiets: usize,
     moves: [ScoredMove; MAX_MOVES],
     skip_quiets: bool,
-    // Stored references to history tables (as raw pointers to avoid lifetime issues)
-    main_history: *const ButterflyHistory,
-    low_ply_history: *const LowPlyHistory,
-    capture_history: *const CapturePieceToHistory,
-    cont_hist_ptrs: [*const PieceToHistory; 6],
-    cont_hist_len: usize,
-    pawn_history: *const PawnHistory,
-    has_pawn_history: bool,
 }
 
-// SAFETY: MovePicker only lives within a single search call where all referenced
-// data outlives it. The raw pointers are never sent across threads.
-#[allow(unsafe_code)]
-unsafe impl Send for MovePicker {}
+/// History tables borrowed only while a move-generation stage is scored.
+///
+/// A picker never retains these references across recursive searches. Passing
+/// current tables preserves the effects of history updates between stages.
+#[derive(Default)]
+pub struct MovePickerHistory<'a> {
+    pub main: Option<&'a ButterflyHistory>,
+    pub low_ply: Option<&'a LowPlyHistory>,
+    pub capture: Option<&'a CapturePieceToHistory>,
+    pub continuation: &'a [&'a PieceToHistory],
+    pub pawn: Option<&'a PawnHistory>,
+}
 
 impl MovePicker {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_main(
-        pos: &Position,
-        tt_move: Move,
-        depth: Depth,
-        main_history: &ButterflyHistory,
-        low_ply_history: &LowPlyHistory,
-        capture_history: &CapturePieceToHistory,
-        cont_hist: &[&PieceToHistory],
-        pawn_history: &PawnHistory,
-        ply: i32,
-    ) -> Self {
+    pub fn new_main(pos: &Position, tt_move: Move, depth: Depth, ply: i32) -> Self {
         let valid_tt = tt_move.is_ok() && pos.pseudo_legal(tt_move);
         let stage = if pos.checkers().is_not_empty() {
             if valid_tt {
@@ -114,13 +103,6 @@ impl MovePicker {
         } else {
             Stage::QCaptureInit
         };
-
-        let mut cont_hist_ptrs = [std::ptr::null(); 6];
-        let cont_hist_len = cont_hist.len().min(6);
-        for (i, &ch) in cont_hist.iter().take(6).enumerate() {
-            cont_hist_ptrs[i] = &raw const *ch;
-        }
-
         Self {
             stage,
             tt_move: if valid_tt { tt_move } else { Move::NONE },
@@ -136,109 +118,33 @@ impl MovePicker {
                 score: 0,
             }; MAX_MOVES],
             skip_quiets: false,
-            main_history: &raw const *main_history,
-            low_ply_history: &raw const *low_ply_history,
-            capture_history: &raw const *capture_history,
-            cont_hist_ptrs,
-            cont_hist_len,
-            pawn_history: &raw const *pawn_history,
-            has_pawn_history: true,
         }
     }
 
     pub fn new_simple(pos: &Position, tt_move: Move, depth: Depth, ply: i32) -> Self {
-        let valid_tt = tt_move.is_ok() && pos.pseudo_legal(tt_move);
-        let stage = if pos.checkers().is_not_empty() {
-            if valid_tt {
-                Stage::EvasionTT
-            } else {
-                Stage::EvasionInit
-            }
-        } else if depth > 0 {
-            if valid_tt {
-                Stage::MainTT
-            } else {
-                Stage::CaptureInit
-            }
-        } else if valid_tt {
-            Stage::QSearchTT
-        } else {
-            Stage::QCaptureInit
-        };
-
-        Self {
-            stage,
-            tt_move: if valid_tt { tt_move } else { Move::NONE },
-            depth,
-            threshold: 0,
-            ply,
-            cur: 0,
-            end_moves: 0,
-            end_bad_captures: 0,
-            end_bad_quiets: 0,
-            moves: [ScoredMove {
-                m: Move::NONE,
-                score: 0,
-            }; MAX_MOVES],
-            skip_quiets: false,
-            main_history: std::ptr::null(),
-            low_ply_history: std::ptr::null(),
-            capture_history: std::ptr::null(),
-            cont_hist_ptrs: [std::ptr::null(); 6],
-            cont_hist_len: 0,
-            pawn_history: std::ptr::null(),
-            has_pawn_history: false,
-        }
+        Self::new_main(pos, tt_move, depth, ply)
     }
 
-    pub fn new_probcut(
-        pos: &Position,
-        tt_move: Move,
-        threshold: Value,
-        capture_history: &CapturePieceToHistory,
-    ) -> Self {
+    pub fn new_probcut(pos: &Position, tt_move: Move, threshold: Value) -> Self {
         let valid_tt = tt_move.is_ok() && pos.is_capture(tt_move) && pos.pseudo_legal(tt_move);
-        let stage = if valid_tt {
+        let mut picker = Self::new_main(pos, Move::NONE, 0, 0);
+        picker.tt_move = if valid_tt { tt_move } else { Move::NONE };
+        picker.stage = if valid_tt {
             Stage::ProbCutTT
         } else {
             Stage::ProbCutInit
         };
-
-        Self {
-            stage,
-            tt_move: if valid_tt { tt_move } else { Move::NONE },
-            depth: 0,
-            threshold,
-            ply: 0,
-            cur: 0,
-            end_moves: 0,
-            end_bad_captures: 0,
-            end_bad_quiets: 0,
-            moves: [ScoredMove {
-                m: Move::NONE,
-                score: 0,
-            }; MAX_MOVES],
-            skip_quiets: false,
-            main_history: std::ptr::null(),
-            low_ply_history: std::ptr::null(),
-            capture_history: &raw const *capture_history,
-            cont_hist_ptrs: [std::ptr::null(); 6],
-            cont_hist_len: 0,
-            pawn_history: std::ptr::null(),
-            has_pawn_history: false,
-        }
+        picker.threshold = threshold;
+        picker
     }
 
     pub const fn skip_quiet_moves(&mut self) {
         self.skip_quiets = true;
     }
 
-    #[allow(unsafe_code)]
-    fn score_captures(&mut self, pos: &Position) {
+    fn score_captures(&mut self, pos: &Position, history: &MovePickerHistory<'_>) {
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Captures);
-        // SAFETY: capture_history pointer is valid for the lifetime of the search call.
-        let capture_hist = unsafe { &*self.capture_history };
         for i in 0..ml.len() {
             let m = ml.get(i);
             let to = m.to_sq();
@@ -248,24 +154,22 @@ impl MovePicker {
                 continue;
             }
             let captured_type = captured.piece_type();
-            let score = i32::from(capture_hist.get(pc, to, captured_type))
-                + 7 * PIECE_VALUE[captured.index()];
+            let score = i32::from(
+                history
+                    .capture
+                    .map_or(0, |table| table.get(pc, to, captured_type)),
+            ) + 7 * PIECE_VALUE[captured.index()];
             self.moves[self.end_moves] = ScoredMove { m, score };
             self.end_moves += 1;
         }
     }
 
-    #[allow(unsafe_code)]
-    fn score_quiets(&mut self, pos: &Position) {
+    fn score_quiets(&mut self, pos: &Position, history: &MovePickerHistory<'_>) {
         use crate::bitboard::square_bb;
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Quiets);
         let us = pos.side_to_move();
         let them = !us;
-
-        // SAFETY: All pointers are valid for the lifetime of the search call.
-        let main_hist = unsafe { &*self.main_history };
-        let low_ply_hist = unsafe { &*self.low_ply_history };
 
         let threat_by_advisor_bishop = pos.attacks_by(PieceType::Pawn, them);
         let threat_by_knight_cannon = threat_by_advisor_bishop
@@ -282,19 +186,15 @@ impl MovePicker {
             let pc = pos.moved_piece(m);
             let pt = pc.piece_type();
 
-            let mut score = 2 * i32::from(main_hist.get(us, m));
-
-            if self.has_pawn_history {
-                // SAFETY: pawn_history pointer is valid.
-                let ph = unsafe { &*self.pawn_history };
-                score += 2 * i32::from(ph.entry(pos.pawn_key()).get(pc, to));
-            }
-
+            let mut score = 2 * i32::from(history.main.map_or(0, |table| table.get(us, m)));
+            score += 2 * i32::from(
+                history
+                    .pawn
+                    .map_or(0, |table| table.entry(pos.pawn_key()).get(pc, to)),
+            );
             for idx in [0, 1, 2, 3, 5] {
-                if idx < self.cont_hist_len && !self.cont_hist_ptrs[idx].is_null() {
-                    // SAFETY: cont_hist pointer is valid.
-                    let ch = unsafe { &*self.cont_hist_ptrs[idx] };
-                    score += i32::from(ch.get(pc, to));
+                if let Some(table) = history.continuation.get(idx) {
+                    score += i32::from(table.get(pc, to));
                 }
             }
 
@@ -324,7 +224,11 @@ impl MovePicker {
             score += PIECE_VALUE[pc] * v;
 
             if (self.ply as usize) < LOW_PLY_HISTORY_SIZE {
-                score += 8 * i32::from(low_ply_hist.get(self.ply as usize, m)) / (1 + self.ply);
+                score += 8 * i32::from(
+                    history
+                        .low_ply
+                        .map_or(0, |table| table.get(self.ply as usize, m)),
+                ) / (1 + self.ply);
             }
 
             self.moves[self.end_moves] = ScoredMove { m, score };
@@ -332,8 +236,7 @@ impl MovePicker {
         }
     }
 
-    #[allow(unsafe_code)]
-    fn score_evasions(&mut self, pos: &Position) {
+    fn score_evasions(&mut self, pos: &Position, history: &MovePickerHistory<'_>) {
         use crate::position::{GenType, generate};
         let ml = generate(pos, GenType::Evasions);
         let us = pos.side_to_move();
@@ -345,18 +248,13 @@ impl MovePicker {
             let captured = pos.piece_on(to);
 
             let score = if captured == crate::types::Piece::NONE {
-                let mut v = 0i32;
-                if !self.main_history.is_null() {
-                    // SAFETY: main_history pointer is valid.
-                    let mh = unsafe { &*self.main_history };
-                    v += i32::from(mh.get(us, m));
-                }
-                if self.cont_hist_len > 0 && !self.cont_hist_ptrs[0].is_null() {
-                    // SAFETY: cont_hist pointer is valid.
-                    let ch = unsafe { &*self.cont_hist_ptrs[0] };
-                    v += i32::from(ch.get(pc, to));
-                }
-                v
+                i32::from(history.main.map_or(0, |table| table.get(us, m)))
+                    + i32::from(
+                        history
+                            .continuation
+                            .first()
+                            .map_or(0, |table| table.get(pc, to)),
+                    )
             } else {
                 PIECE_VALUE[captured.index()] + (1 << 28)
             };
@@ -366,33 +264,17 @@ impl MovePicker {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Pick a move without search history, using material and tactical ordering.
+    pub fn next_move(&mut self, pos: &Position) -> Move {
+        self.next_move_with_history(pos, &MovePickerHistory::default())
+    }
+
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     pub fn next_move_with_history(
         &mut self,
         pos: &Position,
-        main_history: &ButterflyHistory,
-        low_ply_history: &LowPlyHistory,
-        capture_history: &CapturePieceToHistory,
-        cont_hist: &[Option<&PieceToHistory>],
-        pawn_history: Option<&PawnHistory>,
+        history: &MovePickerHistory<'_>,
     ) -> Move {
-        self.main_history = &raw const *main_history;
-        self.low_ply_history = &raw const *low_ply_history;
-        self.capture_history = &raw const *capture_history;
-        self.cont_hist_len = cont_hist.len().min(6);
-        for (i, opt) in cont_hist.iter().take(6).enumerate() {
-            self.cont_hist_ptrs[i] = opt.map_or(std::ptr::null(), |ch| &raw const *ch);
-        }
-        if let Some(ph) = pawn_history {
-            self.pawn_history = &raw const *ph;
-            self.has_pawn_history = true;
-        }
-        self.next_move(pos)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::cognitive_complexity)]
-    pub fn next_move(&mut self, pos: &Position) -> Move {
         loop {
             match self.stage {
                 Stage::MainTT | Stage::EvasionTT | Stage::ProbCutTT | Stage::QSearchTT => {
@@ -414,7 +296,7 @@ impl MovePicker {
                     self.cur = 0;
                     self.end_bad_captures = 0;
                     self.end_moves = 0;
-                    self.score_captures(pos);
+                    self.score_captures(pos, history);
                     partial_insertion_sort(&mut self.moves[..self.end_moves], i32::MIN);
                     self.stage = next;
                 }
@@ -441,7 +323,7 @@ impl MovePicker {
                         self.cur = save;
                         self.end_bad_quiets = save;
                         self.end_moves = save;
-                        self.score_quiets(pos);
+                        self.score_quiets(pos, history);
                         partial_insertion_sort(
                             &mut self.moves[self.cur..self.end_moves],
                             -3330 * self.depth,
@@ -501,7 +383,7 @@ impl MovePicker {
                 Stage::EvasionInit => {
                     self.cur = 0;
                     self.end_moves = 0;
-                    self.score_evasions(pos);
+                    self.score_evasions(pos, history);
                     partial_insertion_sort(&mut self.moves[..self.end_moves], i32::MIN);
                     self.stage = Stage::Evasion;
                 }
@@ -596,14 +478,8 @@ mod tests {
     #[test]
     fn test_movepicker_start_pos() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        let bh = ButterflyHistory::new();
-        let lph = LowPlyHistory::new();
-        let cph = CapturePieceToHistory::new();
-        let ph = PawnHistory::new();
-        let cont_hist_sentinel = PieceToHistory::new();
-        let cont_hist: [&PieceToHistory; 1] = [&cont_hist_sentinel];
 
-        let mut mp = MovePicker::new_main(&pos, Move::NONE, 5, &bh, &lph, &cph, &cont_hist, &ph, 0);
+        let mut mp = MovePicker::new_main(&pos, Move::NONE, 5, 0);
 
         let mut count = 0;
         loop {
@@ -614,22 +490,19 @@ mod tests {
             count += 1;
             assert!(count <= MAX_MOVES);
         }
-        assert!(count > 0, "should generate moves from start position");
+        assert_eq!(
+            count, 44,
+            "picker must generate all legal start-position moves"
+        );
     }
 
     #[test]
     fn test_movepicker_with_tt_move() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        let bh = ButterflyHistory::new();
-        let lph = LowPlyHistory::new();
-        let cph = CapturePieceToHistory::new();
-        let ph = PawnHistory::new();
-        let cont_hist_sentinel = PieceToHistory::new();
-        let cont_hist: [&PieceToHistory; 1] = [&cont_hist_sentinel];
 
         let tt_move = Move::make(Square::SQ_B0, Square::SQ_C2);
 
-        let mut mp = MovePicker::new_main(&pos, tt_move, 5, &bh, &lph, &cph, &cont_hist, &ph, 0);
+        let mut mp = MovePicker::new_main(&pos, tt_move, 5, 0);
 
         let first = mp.next_move(&pos);
         assert_eq!(first, tt_move, "first move should be the TT move");
@@ -650,14 +523,8 @@ mod tests {
     #[test]
     fn test_movepicker_qsearch() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        let bh = ButterflyHistory::new();
-        let lph = LowPlyHistory::new();
-        let cph = CapturePieceToHistory::new();
-        let ph = PawnHistory::new();
-        let cont_hist_sentinel = PieceToHistory::new();
-        let cont_hist: [&PieceToHistory; 1] = [&cont_hist_sentinel];
 
-        let mut mp = MovePicker::new_main(&pos, Move::NONE, 0, &bh, &lph, &cph, &cont_hist, &ph, 0);
+        let mut mp = MovePicker::new_main(&pos, Move::NONE, 0, 0);
 
         let mut count = 0;
         loop {
@@ -675,14 +542,8 @@ mod tests {
     #[test]
     fn test_movepicker_skip_quiets() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        let bh = ButterflyHistory::new();
-        let lph = LowPlyHistory::new();
-        let cph = CapturePieceToHistory::new();
-        let ph = PawnHistory::new();
-        let cont_hist_sentinel = PieceToHistory::new();
-        let cont_hist: [&PieceToHistory; 1] = [&cont_hist_sentinel];
 
-        let mut mp = MovePicker::new_main(&pos, Move::NONE, 5, &bh, &lph, &cph, &cont_hist, &ph, 0);
+        let mut mp = MovePicker::new_main(&pos, Move::NONE, 5, 0);
         mp.skip_quiet_moves();
 
         let mut count = 0;
@@ -700,11 +561,39 @@ mod tests {
     }
 
     #[test]
+    fn history_is_borrowed_only_for_each_selection() {
+        let pos = Position::start_pos().expect("start position");
+        let mut picker = MovePicker::new_main(&pos, Move::NONE, 5, 0);
+        let first = {
+            let capture = CapturePieceToHistory::new();
+            picker.next_move_with_history(
+                &pos,
+                &MovePickerHistory {
+                    capture: Some(&capture),
+                    ..MovePickerHistory::default()
+                },
+            )
+        };
+        assert!(first.is_ok());
+        // The history above no longer exists. Subsequent stages use only the
+        // references provided for this call, never pointers retained by picker.
+        let mut moves = vec![first];
+        loop {
+            let next = picker.next_move(&pos);
+            if next == Move::NONE {
+                break;
+            }
+            assert!(!moves.contains(&next));
+            moves.push(next);
+        }
+        assert_eq!(moves.len(), 44);
+    }
+
+    #[test]
     fn test_movepicker_probcut() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        let cph = CapturePieceToHistory::new();
 
-        let mut mp = MovePicker::new_probcut(&pos, Move::NONE, 200, &cph);
+        let mut mp = MovePicker::new_probcut(&pos, Move::NONE, 200);
 
         let mut count = 0;
         loop {

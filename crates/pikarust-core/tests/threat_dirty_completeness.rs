@@ -1,8 +1,10 @@
 //! Reproduction test for Bug B: `update_piece_threats` produces incomplete
-//! DirtyThreats during `do_move_with_threats`, causing incremental threat
+//! `DirtyThreats` during `do_move_with_threats`, causing incremental threat
 //! accumulator updates to differ from full refresh.
 
-use std::collections::BTreeSet;
+mod common;
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use pikarust_core::nnue::DirtyThreats;
 use pikarust_core::nnue::features::IndexList;
@@ -35,7 +37,7 @@ fn do_move_with_threats(pos: &mut Position, m: pikarust_core::types::Move) -> Di
     dts
 }
 
-/// For each FEN, for every legal move, verify DirtyThreats net effect matches
+/// For each FEN, for every legal move, verify `DirtyThreats` net effect matches
 /// the set-difference of active indices before/after the move.
 /// Also check for duplicate same-direction entries that would cause double-counting.
 #[test]
@@ -80,7 +82,6 @@ fn test_dirty_threats_completeness_all_legal_moves() {
                 let add_vec: Vec<u32> = add_list.as_slice().to_vec();
                 let rem_vec: Vec<u32> = rem_list.as_slice().to_vec();
 
-                use std::collections::BTreeMap;
                 let mut add_counts: BTreeMap<u32, u32> = BTreeMap::new();
                 for &idx in &add_vec {
                     *add_counts.entry(idx).or_insert(0) += 1;
@@ -112,8 +113,7 @@ fn test_dirty_threats_completeness_all_legal_moves() {
                 if net != expected_net {
                     let msg = format!(
                         "FEN: {fen}\n  move: {m} perspective={c}\n  \
-                         net_diff={:?}\n  expected_net={:?}",
-                        net, expected_net,
+                         net_diff={net:?}\n  expected_net={expected_net:?}",
                     );
                     eprintln!("NET MISMATCH: {msg}");
                     failures.push(msg);
@@ -155,15 +155,14 @@ fn test_dirty_threats_completeness_all_legal_moves() {
 }
 
 /// Simulate the search pattern: refresh at root, then for each legal move,
-/// do_move_with_threats → incremental → undo_move. Verify that after undo,
+/// `do_move_with_threats` → incremental → `undo_move`. Verify that after undo,
 /// the root accumulator still matches a fresh refresh.
 #[test]
 fn test_search_flow_single_move() {
     use pikarust_core::nnue::simd::Dispatch;
     use pikarust_core::nnue::{self, Accumulator};
 
-    let model = nnue::NnueModel::load(std::path::Path::new("../../models/pikafish.nnue"))
-        .expect("load model");
+    let model = common::network().model();
     let simd = Dispatch::new();
 
     for &fen in FENS {
@@ -171,7 +170,7 @@ fn test_search_flow_single_move() {
 
         // Step 1: Refresh at root
         let mut root_acc = Accumulator::new();
-        nnue::feature_transformer::refresh_threat_accumulator(&model, &pos, &mut root_acc, &simd);
+        nnue::feature_transformer::refresh_threat_accumulator(model, &pos, &mut root_acc, &simd);
 
         // Step 2: For each legal move, do incremental and compare with refresh
         let ml = generate(&pos, GenType::Legal);
@@ -188,7 +187,7 @@ fn test_search_flow_single_move() {
             // Incremental update from root_acc
             let mut inc_acc = Accumulator::new();
             nnue::feature_transformer::update_threat_accumulator_incremental(
-                &model,
+                model,
                 &pos,
                 &root_acc,
                 &mut inc_acc,
@@ -198,12 +197,7 @@ fn test_search_flow_single_move() {
 
             // Full refresh for comparison
             let mut ref_acc = Accumulator::new();
-            nnue::feature_transformer::refresh_threat_accumulator(
-                &model,
-                &pos,
-                &mut ref_acc,
-                &simd,
-            );
+            nnue::feature_transformer::refresh_threat_accumulator(model, &pos, &mut ref_acc, &simd);
 
             for c in 0..2 {
                 if inc_acc.accumulation[c] != ref_acc.accumulation[c] {
@@ -221,7 +215,7 @@ fn test_search_flow_single_move() {
             // Verify root_acc still matches a fresh refresh of the root position
             let mut fresh_root = Accumulator::new();
             nnue::feature_transformer::refresh_threat_accumulator(
-                &model,
+                model,
                 &pos,
                 &mut fresh_root,
                 &simd,
@@ -263,8 +257,7 @@ fn test_dirty_threats_3move_sequence() {
         check_dirty(
             &pos,
             &dts1,
-            &before1_w,
-            &before1_b,
+            [&before1_w, &before1_b],
             m1,
             fen,
             1,
@@ -281,8 +274,7 @@ fn test_dirty_threats_3move_sequence() {
             check_dirty(
                 &pos,
                 &dts2,
-                &before2_w,
-                &before2_b,
+                [&before2_w, &before2_b],
                 m2,
                 fen,
                 2,
@@ -299,8 +291,7 @@ fn test_dirty_threats_3move_sequence() {
                 check_dirty(
                     &pos,
                     &dts3,
-                    &before3_w,
-                    &before3_b,
+                    [&before3_w, &before3_b],
                     m3,
                     fen,
                     3,
@@ -326,8 +317,7 @@ fn test_dirty_threats_3move_sequence() {
 fn check_dirty(
     pos: &Position,
     dts: &DirtyThreats,
-    before_w: &BTreeSet<u32>,
-    before_b: &BTreeSet<u32>,
+    before: [&BTreeSet<u32>; 2],
     m: pikarust_core::types::Move,
     fen: &str,
     ply: usize,
@@ -337,8 +327,8 @@ fn check_dirty(
     let after_b = active_indices(pos, Color::Black);
 
     for (c, perspective, before, after) in [
-        (0, Color::White, before_w, &after_w),
-        (1, Color::Black, before_b, &after_b),
+        (0, Color::White, before[0], &after_w),
+        (1, Color::Black, before[1], &after_b),
     ] {
         if dts.requires_refresh[c] {
             continue;

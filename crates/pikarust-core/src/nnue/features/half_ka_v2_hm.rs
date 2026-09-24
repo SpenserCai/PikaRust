@@ -72,15 +72,15 @@ fn compute_psq_offsets() -> [[u16; Square::NUM]; Piece::NUM] {
     let mut offsets = [[0u16; Square::NUM]; Piece::NUM];
     let mut cumulative: u16 = 0;
     for &pc in &ALL_PIECES {
-        for sq_idx in 0..Square::NUM {
+        for (sq_idx, offset) in offsets[pc.index()].iter_mut().enumerate() {
             let sq = Square::from_raw_unchecked(sq_idx as u8);
             if valid_bb[pc.index()].contains(sq) {
-                offsets[pc.index()][sq_idx] = cumulative;
+                *offset = cumulative;
                 cumulative += 1;
             }
         }
     }
-    debug_assert!(cumulative == PS_NB as u16);
+    debug_assert_eq!(cumulative, PS_NB as u16);
     offsets
 }
 
@@ -165,7 +165,7 @@ fn compute_index_map() -> [[[u8; Square::NUM]; 2]; 2] {
     let mut v = [[[0u8; Square::NUM]; 2]; 2];
     for m in 0..2u8 {
         for r in 0..2u8 {
-            for s in 0..Square::NUM {
+            for (s, mapped) in v[m as usize][r as usize].iter_mut().enumerate() {
                 let sq = Square::from_raw_unchecked(s as u8);
                 let mut ss = sq;
                 if m != 0 {
@@ -174,7 +174,7 @@ fn compute_index_map() -> [[[u8; Square::NUM]; 2]; 2] {
                 if r != 0 {
                     ss = ss.flip_rank();
                 }
-                v[m as usize][r as usize][s] = ss.raw();
+                *mapped = ss.raw();
             }
         }
     }
@@ -393,13 +393,10 @@ mod tests {
         let mut max_offset: u16 = 0;
         let vbb = &*VALID_BB;
         for &pc in &ALL_PIECES {
-            for sq_idx in 0..Square::NUM {
+            for (sq_idx, &off) in offsets[pc.index()].iter().enumerate() {
                 let sq = Square::from_raw_unchecked(sq_idx as u8);
                 if vbb[pc.index()].contains(sq) {
-                    let off = offsets[pc.index()][sq_idx];
-                    if off > max_offset {
-                        max_offset = off;
-                    }
+                    max_offset = max_offset.max(off);
                 }
             }
         }

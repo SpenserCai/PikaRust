@@ -39,7 +39,7 @@ impl Worker {
                 &self.limits,
                 us,
                 i32::from(self.root_pos.game_ply()),
-                50,
+                self.limits.move_overhead,
                 self.limits.ponder_mode,
             );
         }
@@ -253,47 +253,48 @@ impl Worker {
     pub fn ab_search<const ROOT: bool>(
         &mut self,
         ply: i32,
+        alpha: Value,
+        beta: Value,
+        depth: Depth,
+        cut_node: bool,
+    ) -> Value {
+        self.search_node::<ROOT>(ply, alpha, beta, depth, cut_node, ROOT || alpha + 1 != beta)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity
+    )]
+    fn search_node<const ROOT: bool>(
+        &mut self,
+        ply: i32,
         mut alpha: Value,
         mut beta: Value,
         mut depth: Depth,
         cut_node: bool,
+        pv_node: bool,
     ) -> Value {
-        let pv_node = ROOT || alpha + 1 != beta;
         let all_node = !pv_node && !cut_node;
         let ss = self.ss_idx(ply);
 
-        // Phase B: Initialize statScore for this ply
-        self.ss_stat_scores[ss] = 0;
-
-        // Phase B: Set followPV
-        self.ss_follow_pvs[ss] = ROOT
-            || (ss >= 1
-                && self.ss_follow_pvs[ss - 1]
-                && (ply as usize) >= 1
-                && (ply as usize - 1) < self.last_iteration_pv.len()
-                && self.ss_current_moves[ss - 1] == self.last_iteration_pv[ply as usize - 1]);
-
-        // PV node: clear child PV (will be filled by child search)
-        if pv_node {
-            let child_ss = self.ss_idx(ply + 1);
-            if child_ss < self.ss_pvs.len() {
-                self.ss_pvs[child_ss].clear();
-            }
-        }
-
+        // Quiescence owns a distinct stack lifecycle. In particular, do not
+        // reset full-search statistics when descending directly into qsearch.
         if depth <= 0 {
             return self.qsearch(ply, alpha, beta, pv_node);
         }
-
         depth = depth.min(MAX_PLY - 1);
+        self.ss_follow_pvs[ss] = ROOT
+            || (ss >= 1
+                && self.ss_follow_pvs[ss - 1]
+                && ply >= 1
+                && (ply as usize - 1) < self.last_iteration_pv.len()
+                && self.ss_current_moves[ss - 1] == self.last_iteration_pv[ply as usize - 1]);
 
         let in_check = self.root_pos.checkers().is_not_empty();
         self.ss_in_check[ss] = in_check;
         let us = self.root_pos.side_to_move();
         self.ss_move_counts[ss] = 0;
-        if ss + 2 < self.ss_cutoff_cnts.len() {
-            self.ss_cutoff_cnts[ss + 2] = 0;
-        }
 
         if self.is_main_thread() {
             self.check_time();
@@ -337,6 +338,12 @@ impl Worker {
             }
         }
 
+        self.ss_stat_scores[ss] = 0;
+        self.ss_cutoff_cnts[ss + 2] = 0;
+        if pv_node {
+            self.ss_pvs[ss + 1].clear();
+        }
+
         let pos_key = self.root_pos.key();
         let probe = self.tt.probe(pos_key);
         let tt_hit = probe.found;
@@ -376,6 +383,8 @@ impl Worker {
 
         // Static evaluation
         let mut unadjusted_static_eval = VALUE_NONE;
+        // Keep one parent-position snapshot across ProbCut and singular searches.
+        let correction_val = self.correction_value(ply);
         let mut eval;
 
         if in_check {
@@ -389,7 +398,6 @@ impl Worker {
             unadjusted_static_eval = self.ss_static_evals[ss];
             eval = unadjusted_static_eval;
         } else {
-            let correction_val = self.correction_value(ply);
             if tt_hit {
                 unadjusted_static_eval = tt_data.eval;
                 if !is_valid(unadjusted_static_eval) {
@@ -403,6 +411,7 @@ impl Worker {
 
             if !tt_hit {
                 tt_writer.write(
+                    &self.tt,
                     pos_key,
                     VALUE_NONE,
                     self.ss_tt_pvs[ss],
@@ -551,7 +560,6 @@ impl Worker {
                 && !is_win(eval)
             {
                 let fm = 129 - 33 * i32::from(!tt_hit);
-                let correction_val = self.correction_value(ply);
                 let margin = fm * depth
                     - (2512 * i32::from(improving) + 340 * i32::from(opponent_worsening)) * fm
                         / 1024
@@ -620,11 +628,10 @@ impl Worker {
                     &self.root_pos,
                     tt_data.tt_move,
                     prob_cut_beta - self.ss_static_evals[ss],
-                    &self.capture_history,
                 );
 
                 loop {
-                    let pc_move = pc_mp.next_move(&self.root_pos);
+                    let pc_move = self.pick_next_move(&mut pc_mp, ply, 6);
                     if pc_move == Move::NONE {
                         break;
                     }
@@ -661,6 +668,7 @@ impl Worker {
                     if pc_value >= prob_cut_beta {
                         // Save ProbCut data into transposition table
                         tt_writer.write(
+                            &self.tt,
                             pos_key,
                             value_to_tt(pc_value, ply),
                             self.ss_tt_pvs[ss],
@@ -694,21 +702,7 @@ impl Worker {
         }
 
         // Moves loop — build contHist from search stack
-        let (cont_hist_buf, cont_hist_len) = self.build_cont_hist_for_movepicker(ply);
-        let cont_hist_slice = &cont_hist_buf[..cont_hist_len];
-
-        let mut mp = MovePicker::new_main(
-            &self.root_pos,
-            tt_data.tt_move,
-            depth,
-            &self.main_history,
-            &self.low_ply_history,
-            &self.capture_history,
-            &cont_hist_slice,
-            &self.pawn_history,
-            ply,
-        );
-
+        let mut mp = MovePicker::new_main(&self.root_pos, tt_data.tt_move, depth, ply);
         let mut best_value = -VALUE_INFINITE;
         let mut best_move = Move::NONE;
         let mut move_count = 0i32;
@@ -717,11 +711,8 @@ impl Worker {
         let mut captures_searched = [Move::NONE; SEARCHED_LIST_CAPACITY];
         let mut captures_count = 0usize;
 
-        // Compute correction value once before moves loop (on parent position)
-        let correction_val = self.correction_value(ply);
-
         loop {
-            let m = mp.next_move(&self.root_pos);
+            let m = self.pick_next_move(&mut mp, ply, 6);
             if m == Move::NONE {
                 break;
             }
@@ -744,6 +735,13 @@ impl Worker {
 
             move_count += 1;
             self.ss_move_counts[ss] = move_count;
+
+            // A sibling searched only with a null window has no principal
+            // variation. Equal-score promotion must not append the previous
+            // sibling's line (the reference resets its child PV pointer here).
+            if pv_node {
+                self.ss_pvs[ss + 1].clear();
+            }
 
             let capture = self.root_pos.is_capture(m);
             let gives_check = self.root_pos.gives_check(m);
@@ -803,15 +801,11 @@ impl Worker {
                 && !is_loss(best_value)
                 && (capture || gives_check)
             {
-                let capt_hist = if capture {
-                    i32::from(self.capture_history.get(
-                        moved_piece,
-                        m.to_sq(),
-                        self.root_pos.piece_on(m.to_sq()).piece_type(),
-                    ))
-                } else {
-                    0
-                };
+                let capt_hist = i32::from(self.capture_history.get_for_capture(
+                    moved_piece,
+                    m.to_sq(),
+                    self.root_pos.piece_on(m.to_sq()),
+                ));
                 let margin = (256 * depth + capt_hist * 34 / 1024).max(0);
                 if !self.root_pos.see_ge(m, -margin) {
                     continue;
@@ -1033,7 +1027,8 @@ impl Worker {
                 {
                     new_depth = new_depth.max(1);
                 }
-                value = -self.ab_search::<false>(ply + 1, -beta, -alpha, new_depth, false);
+                // PV identity survives a narrowed, possibly one-point window.
+                value = -self.search_node::<false>(ply + 1, -beta, -alpha, new_depth, false, true);
             }
 
             // Undo move
@@ -1264,6 +1259,7 @@ impl Worker {
                 Bound::Upper
             };
             tt_writer.write(
+                &self.tt,
                 pos_key,
                 value_to_tt(best_value, ply),
                 self.ss_tt_pvs[ss],
@@ -1344,16 +1340,6 @@ mod tests {
     const MIDGAME_FEN: &str =
         "r1bakab1r/9/1cn1c1n2/p1p1p1p1p/9/9/P1P1P1P1P/1C2C1N2/9/RNBAKAB1R w - - 0 1";
 
-    fn load_network() -> Option<Arc<crate::nnue::Network>> {
-        let path = std::path::Path::new("models/pikafish.nnue");
-        if !path.exists() {
-            return None;
-        }
-        crate::nnue::NnueModel::load(path)
-            .ok()
-            .map(|m| Arc::new(crate::nnue::Network::new(m)))
-    }
-
     /// Create a Worker ready for search on the given FEN at the given depth.
     fn make_worker(fen: &str, depth: i32, network: Option<Arc<crate::nnue::Network>>) -> Worker {
         let stop = Arc::new(AtomicBool::new(false));
@@ -1390,6 +1376,71 @@ mod tests {
         w
     }
 
+    #[test]
+    fn equal_score_promotion_does_not_append_a_siblings_principal_variation() {
+        let fen = "2bak4/9/3a5/p2Np3p/3n1P3/3pc3P/P4r1c1/B2CC2R1/4A4/3AK1B2 b - - 0 1";
+        let mut worker = make_worker(fen, 8, Some(crate::nnue::test_network()));
+        worker.clear();
+        worker.iterative_deepening();
+        let pv = &worker.root_moves[0].pv;
+        let mut position = Position::from_fen(fen).expect("benchmark position");
+        for &movement in pv {
+            assert!(
+                position.is_legal_move(movement),
+                "illegal PV move {movement}"
+            );
+            position.do_move(movement, position.gives_check(movement));
+        }
+        // Independently captured from Pikafish 76239d0b, Threads=1, Hash=16,
+        // the pinned model, ucinewgame, and go depth 8 (6565 nodes, cp 44).
+        let expected = ["d4c4", "h2f2", "f3f2", "d2f2", "d9e8", "a2c4", "h3i3"];
+        assert_eq!(
+            pv.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn narrow_pv_window_does_not_take_a_non_pv_tt_cutoff() {
+        let mut worker = make_worker(START_FEN, 1, None);
+        let key = worker.root_pos.key();
+        worker.tt.probe(key).writer.write(
+            &worker.tt,
+            key,
+            150,
+            false,
+            crate::types::Bound::Exact,
+            8,
+            Move::NONE,
+            0,
+            worker.tt.generation(),
+        );
+        worker.search_node::<false>(1, 100, 101, 1, false, true);
+        assert!(
+            worker.node_count() > 0,
+            "PV nodes must search even with a one-point window"
+        );
+    }
+
+    #[test]
+    fn qsearch_dispatch_preserves_full_search_stack_state() {
+        let mut worker = make_worker(START_FEN, 1, None);
+        let ss = worker.ss_idx(1);
+        worker.ss_stat_scores[ss] = 456;
+        worker.ss_follow_pvs[ss] = true;
+        worker.ss_cutoff_cnts[ss + 2] = 3;
+        worker.ab_search::<false>(
+            1,
+            -crate::types::VALUE_INFINITE,
+            crate::types::VALUE_INFINITE,
+            0,
+            false,
+        );
+        assert_eq!(worker.ss_stat_scores[ss], 456);
+        assert!(worker.ss_follow_pvs[ss]);
+        assert_eq!(worker.ss_cutoff_cnts[ss + 2], 3);
+    }
+
     // ---------------------------------------------------------------
     // Section 8.2: Unit Tests
     // ---------------------------------------------------------------
@@ -1400,7 +1451,7 @@ mod tests {
         // Red has a rook that can capture a pawn, but the position is
         // already losing enough that the capture doesn't help.
         let fen = "4k4/4a4/4b4/9/9/4R4/9/9/4A4/4K4 w - - 0 1";
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(fen, 5, network);
         let result = w.iterative_deepening();
 
@@ -1415,7 +1466,7 @@ mod tests {
 
     #[test]
     fn test_step13_see_pruning_reduces_nodes() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 10, network);
         w.iterative_deepening();
 
@@ -1433,7 +1484,7 @@ mod tests {
 
     #[test]
     fn test_step13_quiet_futility_prunes_hopeless_quiets() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(DOMINANT_FEN, 8, network);
         let result = w.iterative_deepening();
 
@@ -1454,7 +1505,7 @@ mod tests {
 
     #[test]
     fn test_stat_score_nonzero_after_search() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 5, network);
         w.iterative_deepening();
 
@@ -1470,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_follow_pv_set_at_root() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 3, network);
         w.iterative_deepening();
 
@@ -1486,7 +1537,7 @@ mod tests {
 
     #[test]
     fn test_mean_squared_score_updated_after_search() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 5, network);
 
         let initial_mss = w.root_moves[0].mean_squared_score;
@@ -1505,7 +1556,7 @@ mod tests {
         // The key test is that the search completes without panic and
         // returns a legal move, exercising the depth adjustment code.
         let fen = "r1bakab1r/9/2n1c1n2/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R b - - 0 1";
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(fen, 6, network);
         let result = w.iterative_deepening();
 
@@ -1519,7 +1570,7 @@ mod tests {
 
     #[test]
     fn test_lmr_cutoff_cnt_affects_reduction() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 8, network);
         let result = w.iterative_deepening();
 
@@ -1534,7 +1585,7 @@ mod tests {
 
     #[test]
     fn test_tt_cutoff_updates_history() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
 
         // First search: populates TT and history tables
         let stop = Arc::new(AtomicBool::new(false));
@@ -1608,7 +1659,7 @@ mod tests {
     #[test]
     #[ignore = "slow: depth 18 search takes ~30s in release mode"]
     fn test_search_depth18_node_count_reasonable() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 18, network);
 
         let start = std::time::Instant::now();
@@ -1631,7 +1682,7 @@ mod tests {
 
     #[test]
     fn test_search_depth12_completes_quickly() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(START_FEN, 12, network);
 
         let start = std::time::Instant::now();
@@ -1656,7 +1707,7 @@ mod tests {
 
     #[test]
     fn test_eval_equivalence_midgame_within_300cp() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(MIDGAME_FEN, 5, network);
         w.iterative_deepening();
 
@@ -1669,7 +1720,7 @@ mod tests {
 
     #[test]
     fn test_eval_diff_updates_main_history() {
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
 
         // Create a fresh worker with zeroed history
         let stop = Arc::new(AtomicBool::new(false));
@@ -1740,7 +1791,7 @@ mod tests {
         // Use a position likely to trigger singular extension:
         // a tactical position where one move is clearly best.
         let fen = "2bak4/4a4/4b4/9/2r6/1R7/9/4B4/4A4/2BAK4 w - - 0 1";
-        let network = load_network();
+        let network = Some(crate::nnue::test_network());
         let mut w = make_worker(fen, 8, network);
         let result = w.iterative_deepening();
 

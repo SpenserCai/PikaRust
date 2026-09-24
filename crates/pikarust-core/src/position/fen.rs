@@ -44,7 +44,18 @@ impl Position {
     pub fn from_fen(fen: &str) -> Result<Self, FenError> {
         let mut pos = Self::new();
         pos.mid_encoding_val = [BALANCE_ENCODING; Color::NUM];
-        let mut chars = fen.bytes().peekable();
+        let fields: Vec<_> = fen.split_whitespace().collect();
+        if fields.len() != 2 && !(4..=6).contains(&fields.len()) {
+            return Err(FenError::Invalid(
+                "expected two or four to six FEN fields".into(),
+            ));
+        }
+        if fields.len() >= 4 && (fields[2] != "-" || fields[3] != "-") {
+            return Err(FenError::Invalid(
+                "Xiangqi has no castling or en passant".into(),
+            ));
+        }
+        let mut chars = fields[0].bytes().chain(std::iter::once(b' '));
 
         let mut file = 0u8;
         let mut rank = 9u8;
@@ -124,39 +135,33 @@ impl Position {
             }
         }
 
-        // 2. Active color
-        let token = chars
-            .next()
-            .ok_or_else(|| FenError::Invalid("missing side to move".into()))?;
-        pos.side_to_move = match token {
-            b'w' => Color::White,
-            b'b' => Color::Black,
-            _ => {
-                return Err(FenError::Invalid(format!(
-                    "invalid side to move: {}",
-                    token as char
+        for color in Color::ALL {
+            if pos.count_type(color, PieceType::King) != 1 {
+                return Err(FenError::Unsupported(format!(
+                    "{color} must have exactly one king"
                 )));
             }
-        };
-
-        // Skip space after side-to-move
-        skip_to_space(&mut chars);
-        // Skip castling field (always "-" in xiangqi)
-        skip_to_space(&mut chars);
-        // Skip en passant field (always "-" in xiangqi)
-        skip_to_space(&mut chars);
-
-        // 3-4. Halfmove clock and fullmove number
-        let rule60 = parse_int(&mut chars).unwrap_or(0);
-        let fullmove = parse_int(&mut chars).unwrap_or(1);
-
-        if !(0..=120).contains(&rule60) {
-            return Err(FenError::Unsupported("rule60 counter out of range".into()));
         }
 
-        pos.state.rule60 = rule60;
-        pos.game_ply =
-            (2 * (fullmove - 1).max(0) + i32::from(pos.side_to_move == Color::Black)) as u16;
+        pos.side_to_move = match *fields.get(1).expect("validated field count") {
+            "w" => Color::White,
+            "b" => Color::Black,
+            _ => return Err(FenError::Invalid("invalid side to move".into())),
+        };
+        let rule60 = parse_counter(fields.get(4).copied().unwrap_or("0"), "halfmove")?;
+        let fullmove = parse_counter(fields.get(5).copied().unwrap_or("1"), "fullmove")?;
+        if rule60 > 120 {
+            return Err(FenError::Unsupported("rule60 counter out of range".into()));
+        }
+        // Leave headroom for the entire search stack, including extensions.
+        let game_ply = fullmove
+            .checked_sub(1)
+            .and_then(|value| value.checked_mul(2))
+            .and_then(|value| value.checked_add(u32::from(pos.side_to_move == Color::Black)))
+            .filter(|&value| value <= u32::from(u16::MAX) - crate::types::MAX_PLY as u32)
+            .ok_or_else(|| FenError::Unsupported("fullmove counter out of range".into()))?;
+        pos.state.rule60 = rule60 as i32;
+        pos.game_ply = game_ply as u16;
 
         pos.set_state();
 
@@ -255,47 +260,38 @@ impl Position {
     }
 }
 
-fn skip_to_space(chars: &mut std::iter::Peekable<std::str::Bytes<'_>>) {
-    for ch in chars.by_ref() {
-        if ch == b' ' {
-            return;
-        }
+fn parse_counter(field: &str, name: &str) -> Result<u32, FenError> {
+    if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(FenError::Invalid(format!("invalid {name} counter")));
     }
-}
-
-fn parse_int(chars: &mut std::iter::Peekable<std::str::Bytes<'_>>) -> Option<i32> {
-    // Skip leading whitespace
-    while chars.peek().is_some_and(|&c| c == b' ') {
-        chars.next();
-    }
-
-    let mut result: i32 = 0;
-    let mut found = false;
-    let negative = chars.peek().is_some_and(|&c| c == b'-');
-    if negative {
-        chars.next();
-    }
-
-    while let Some(&ch) = chars.peek() {
-        if ch.is_ascii_digit() {
-            found = true;
-            result = result * 10 + i32::from(ch - b'0');
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    if found {
-        Some(if negative { -result } else { result })
-    } else {
-        None
-    }
+    field
+        .parse()
+        .map_err(|_| FenError::Invalid(format!("{name} counter out of range")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_fens_return_errors_without_panicking() {
+        let board = START_FEN.split_whitespace().next().unwrap();
+        for fen in [
+            "9/9/9/9/9/9/9/9/9/9 w - - 0 1".to_owned(),
+            "4k4/9/9/9/9/9/9/9/9/9 w - - 0 1".to_owned(),
+            format!("{board} w - - 999999999999999999999999 1"),
+            format!("{board} w - - 0 2147483647"),
+            format!("{board} w - - 0 65536"),
+            format!("{board} w - - 0 -1"),
+            format!("{board} w - - 0 invalid"),
+            format!("{board} w - - 0 1 trailing"),
+            format!("{board} white - - 0 1"),
+        ] {
+            let result = std::panic::catch_unwind(|| Position::from_fen(&fen));
+            assert!(result.is_ok(), "FEN parser panicked: {fen}");
+            assert!(result.unwrap().is_err(), "invalid FEN was accepted: {fen}");
+        }
+    }
 
     #[test]
     fn test_start_pos_fen_roundtrip() {

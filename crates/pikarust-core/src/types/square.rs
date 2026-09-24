@@ -208,6 +208,7 @@ impl Square {
     #[inline]
     #[allow(unsafe_code)]
     pub const fn rank(self) -> Rank {
+        assert!(self.0 < 90, "invalid square rank");
         // SAFETY: for valid squares (0..89), self.0 / 9 is in 0..=9.
         unsafe { std::mem::transmute(self.0 / 9) }
     }
@@ -217,6 +218,7 @@ impl Square {
     #[must_use]
     #[allow(unsafe_code)]
     pub const fn flip_rank(self) -> Self {
+        assert!(self.0 < 90, "invalid square rank");
         // SAFETY: for valid squares, 9 - self.0 / 9 is in 0..=9, valid for Rank.
         Self::make(self.file(), unsafe { std::mem::transmute(9 - self.0 / 9) })
     }
@@ -245,11 +247,13 @@ impl Square {
         self.0
     }
 
-    /// Construct a `Square` from a raw u8 without bounds checking.
-    /// Caller must ensure `v < 90`.
+    /// Construct a square from its board index.
+    ///
+    /// Panics for indexes outside the board, including the `NONE` sentinel.
+    /// The historical name is retained for source compatibility.
     #[inline]
     pub const fn from_raw_unchecked(v: u8) -> Self {
-        debug_assert!(v < 90, "Square::from_raw_unchecked out of range");
+        assert!(v < 90, "Square::from_raw_unchecked out of range");
         Self(v)
     }
 }
@@ -482,7 +486,8 @@ mod tests {
     #[test]
     fn test_square_debug() {
         assert_eq!(format!("{:?}", Square::NONE), "Square::NONE");
-        assert!(format!("{:?}", Square::SQ_A0).contains("a0"));
+        let debug_square = format!("{:?}", Square::SQ_A0);
+        assert!(debug_square.contains("a0"));
     }
 
     #[test]

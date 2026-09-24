@@ -16,21 +16,59 @@ fn main() {
 
     match command {
         "run" => {
-            let filter = args.get(2).map(String::as_str);
-            run_tests(filter);
+            if args.get(2).is_some_and(|value| value == "--suite") {
+                if args.len() != 4 {
+                    usage();
+                }
+                run_tests(None, &args[3]);
+            } else {
+                if args.len() > 3 {
+                    usage();
+                }
+                run_tests(args.get(2).map(String::as_str), "all");
+            }
+        }
+        "record-search-baseline" => {
+            if args.len() != 3 {
+                usage();
+            }
+            let config = E2eConfig::from_project_root(&find_project_root());
+            let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let checks = pikarust_e2e::checks::preflight::run_preflight(&config, false);
+                if checks.iter().any(|check| !check.passed) {
+                    return Err("baseline prerequisites failed".into());
+                }
+                let snapshot = pikarust_e2e::cases::alignment::record_search_baseline(&config)?;
+                let path = PathBuf::from(&args[2]);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, serde_json::to_vec_pretty(&snapshot)?)?;
+                println!(
+                    "Recorded {}; review the diff before replacing the fixture",
+                    path.display()
+                );
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("{error}");
+                process::exit(1);
+            }
         }
         "list" => {
+            if args.len() != 2 {
+                usage();
+            }
             list_tests();
         }
         _ => {
-            eprintln!("Usage: pikarust-e2e [run [filter] | list]");
-            process::exit(1);
+            usage();
         }
     }
 }
 
 /// Run E2E tests and exit with appropriate code.
-fn run_tests(filter: Option<&str>) {
+fn run_tests(filter: Option<&str>, suite: &str) {
     let project_root = find_project_root();
     let config = E2eConfig::from_project_root(&project_root);
 
@@ -38,7 +76,15 @@ fn run_tests(filter: Option<&str>) {
     log::info!("pikarust bin: {}", config.pikarust_bin.display());
     log::info!("pikafish bin: {}", config.pikafish_bin.display());
 
-    let report = runner::run_all(&config, filter);
+    let report = runner::run_all(&config, filter, suite);
+    let report_path = std::env::var_os("PIKARUST_E2E_REPORT").map_or_else(
+        || project_root.join("target/e2e/report.json"),
+        PathBuf::from,
+    );
+    if let Err(error) = report::write_json(&report, &report_path) {
+        eprintln!("Cannot write {}: {error}", report_path.display());
+        process::exit(1);
+    }
     report::print_report(&report);
 
     if report::all_passed(&report) {
@@ -94,4 +140,11 @@ fn find_project_root() -> PathBuf {
     }
 
     dir
+}
+
+fn usage() -> ! {
+    eprintln!(
+        "Usage: pikarust-e2e [run [filter] | run --suite smoke|alignment|all | list | record-search-baseline PATH]"
+    );
+    process::exit(2)
 }

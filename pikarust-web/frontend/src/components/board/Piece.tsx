@@ -19,7 +19,8 @@ export function Piece({ type, x, y, selected, isLastMove, flipped = false }: Pie
   const color = red ? 'var(--color-red-piece)' : 'var(--color-black-piece)';
 
   return (
-    <g transform={`translate(${x}, ${y})`} style={{ cursor: 'pointer' }}>
+    <g data-testid="piece" data-square={`${String.fromCharCode(97 + x)}${9 - y}`} data-piece={type}
+      transform={`translate(${x}, ${y})`} style={{ cursor: 'pointer' }}>
       {selected && (
         <circle r={0.48} fill="none" stroke="var(--color-accent)" strokeWidth={0.08}
           filter="url(#glow)" />

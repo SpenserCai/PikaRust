@@ -84,7 +84,8 @@ impl Default for EngineOptions {
 
 const MAX_HASH_MB: i64 = 65536;
 const MAX_THREADS: i64 = 1024;
-const MAX_MULTI_PV: i64 = 500;
+// Multiple principal variations require a separate root-search loop.
+const MAX_MULTI_PV: i64 = 1;
 const MAX_MOVE_OVERHEAD: i64 = 5000;
 
 impl EngineOptions {
@@ -228,8 +229,9 @@ mod tests {
     #[test]
     fn test_set_multi_pv() {
         let mut opts = EngineOptions::default();
-        opts.set("MultiPV", "3").unwrap();
-        assert_eq!(opts.multi_pv, 3);
+        opts.set("MultiPV", "1").unwrap();
+        assert_eq!(opts.multi_pv, 1);
+        assert!(opts.set("MultiPV", "3").is_err());
     }
 
     #[test]

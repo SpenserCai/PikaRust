@@ -4,49 +4,51 @@ pub struct Scalar;
 
 impl SimdOps for Scalar {
     fn vec_add_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         for (x, &y) in a.iter_mut().zip(b.iter()) {
             *x = x.wrapping_add(y);
         }
     }
 
     fn vec_sub_i16(a: &mut [i16], b: &[i16]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         for (x, &y) in a.iter_mut().zip(b.iter()) {
             *x = x.wrapping_sub(y);
         }
     }
 
     fn vec_add_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         for (a, &w) in acc.iter_mut().zip(weights.iter()) {
-            *a += i16::from(w);
+            *a = a.wrapping_add(i16::from(w));
         }
     }
 
     fn vec_sub_i16_widening(acc: &mut [i16], weights: &[i8]) {
+        assert_eq!(acc.len(), weights.len());
         for (a, &w) in acc.iter_mut().zip(weights.iter()) {
-            *a -= i16::from(w);
+            *a = a.wrapping_sub(i16::from(w));
         }
     }
 
     fn vec_add_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         for (x, &y) in a.iter_mut().zip(b.iter()) {
             *x = x.wrapping_add(y);
         }
     }
 
     fn vec_sub_i32(a: &mut [i32], b: &[i32]) {
-        debug_assert_eq!(a.len(), b.len());
+        assert_eq!(a.len(), b.len());
         for (x, &y) in a.iter_mut().zip(b.iter()) {
             *x = x.wrapping_sub(y);
         }
     }
 
     fn transform_features(psq_acc: &[i16], threat_acc: &[i16], output: &mut [u8]) {
-        debug_assert_eq!(psq_acc.len(), 1024);
-        debug_assert_eq!(threat_acc.len(), 1024);
-        debug_assert!(output.len() >= 512);
+        assert_eq!(psq_acc.len(), 1024);
+        assert_eq!(threat_acc.len(), 1024);
+        assert!(output.len() >= 512);
 
         for j in 0..512 {
             let sum0 = i32::from(psq_acc[j]) + i32::from(threat_acc[j]);
@@ -58,12 +60,22 @@ impl SimdOps for Scalar {
     }
 
     fn clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+        assert!(
+            output.len() >= input.len(),
+            "activation output is too short"
+        );
+        assert!(shift < 32, "activation shift must be below 32");
         for (i, &x) in input.iter().enumerate() {
             output[i] = (x >> shift).clamp(0, 127) as u8;
         }
     }
 
     fn sqr_clipped_relu(input: &[i32], output: &mut [u8], shift: u32) {
+        assert!(
+            output.len() >= input.len(),
+            "activation output is too short"
+        );
+        assert!(shift <= 28, "squared activation shift must be at most 28");
         for (i, &x) in input.iter().enumerate() {
             let v = i64::from(x);
             let squared = (v * v) >> (2 * shift + 7);
@@ -79,6 +91,7 @@ impl SimdOps for Scalar {
         in_dim: usize,
         out_dim: usize,
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, in_dim, out_dim);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         for i in 0..in_dim.min(input.len()) {
@@ -87,18 +100,20 @@ impl SimdOps for Scalar {
             }
             let in_val = i32::from(input[i]);
             for o in 0..out_dim {
-                output[o] += in_val * i32::from(weights[i * out_dim + o]);
+                output[o] = output[o].wrapping_add(in_val * i32::from(weights[i * out_dim + o]));
             }
         }
     }
 
     fn horizontal_sum_i32(data: &[i32]) -> i32 {
-        data.iter().sum()
+        data.iter()
+            .fold(0_i32, |sum, &value| sum.wrapping_add(value))
     }
 
     fn find_nnz(input: &[u8], nnz_indices: &mut [usize; super::MAX_NNZ]) -> usize {
+        assert_eq!(input.len() % 4, 0, "NNZ input must contain complete blocks");
         let chunks = input.len() / 4;
-        debug_assert!(chunks <= super::MAX_NNZ);
+        assert!(chunks <= super::MAX_NNZ);
         let mut count = 0;
         for i in 0..chunks {
             let base = i * 4;
@@ -122,6 +137,8 @@ impl SimdOps for Scalar {
         out_dim: usize,
         nnz_indices: &[usize],
     ) {
+        super::validate_affine_dimensions(input, weights, biases, output, input.len(), out_dim);
+        super::validate_sparse_indices(input.len(), nnz_indices);
         output[..out_dim].copy_from_slice(&biases[..out_dim]);
 
         for &block_idx in nnz_indices {
@@ -136,7 +153,8 @@ impl SimdOps for Scalar {
                 }
                 let in_val = i32::from(input[idx]);
                 for o in 0..out_dim {
-                    output[o] += in_val * i32::from(weights[idx * out_dim + o]);
+                    output[o] =
+                        output[o].wrapping_add(in_val * i32::from(weights[idx * out_dim + o]));
                 }
             }
         }

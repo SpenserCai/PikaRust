@@ -1,4 +1,5 @@
 import type { Move, Position, Square } from '@/lib/types';
+import { squareToUci } from '@/lib/game';
 import { BoardGrid } from './BoardGrid';
 import { Piece } from './Piece';
 
@@ -35,6 +36,7 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
 
   return (
     <svg
+      data-testid="board" data-flipped={flipped} role="img" aria-label="象棋棋盘"
       viewBox={`${-padding} ${-padding} ${w} ${h}`}
       onClick={handleClick}
       className="w-full max-w-[600px] lg:max-w-[640px] rounded-xl overflow-hidden border border-[var(--color-border)]"
@@ -76,10 +78,10 @@ export function Board({ position, onSquareClick, selectedSquare, validMoves = []
         {validMoves.map(({ row, col }) => {
           const isCapture = position[row]?.[col] != null;
           return isCapture ? (
-            <circle key={`vm${row}-${col}`} cx={col} cy={row} r={0.42}
+            <circle key={`vm${row}-${col}`} data-testid="legal-target" data-square={squareToUci({ row, col })} cx={col} cy={row} r={0.42}
               fill="none" stroke="var(--color-accent)" strokeWidth={0.06} opacity={0.6} />
           ) : (
-            <circle key={`vm${row}-${col}`} cx={col} cy={row} r={0.12}
+            <circle key={`vm${row}-${col}`} data-testid="legal-target" data-square={squareToUci({ row, col })} cx={col} cy={row} r={0.12}
               fill="var(--color-accent)" opacity={0.5} />
           );
         })}

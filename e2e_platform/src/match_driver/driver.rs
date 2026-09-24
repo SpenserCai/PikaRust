@@ -47,6 +47,7 @@ fn play_one_move(
 
     let (bm, _infos) = match search_mode {
         SearchMode::Depth(d) => uci_io::go_depth(engine, *d, timeout)?,
+        SearchMode::Nodes(nodes) => uci_io::go_nodes(engine, *nodes, timeout)?,
         SearchMode::Movetime(ms) => {
             // Timeout = movetime + generous buffer for engine overhead
             let effective_timeout = Duration::from_millis(*ms) + timeout;
@@ -98,17 +99,19 @@ fn play_one_move(
 /// Both engines are spawned, configured with Threads=1 and the specified Hash,
 /// then alternate moves until the game ends.
 pub fn run_match(config: &MatchConfig) -> E2eResult<MatchRecord> {
-    let mut white = EngineProcess::spawn(
+    let mut white = EngineProcess::spawn_with_model(
         &config.white_name,
         &config.white_bin,
         &config.white_cwd,
         config.response_timeout,
+        config.nnue_model.as_deref(),
     )?;
-    let mut black = EngineProcess::spawn(
+    let mut black = EngineProcess::spawn_with_model(
         &config.black_name,
         &config.black_bin,
         &config.black_cwd,
         config.response_timeout,
+        config.nnue_model.as_deref(),
     )?;
 
     let timeout = config.response_timeout;
@@ -133,6 +136,16 @@ pub fn run_match(config: &MatchConfig) -> E2eResult<MatchRecord> {
     };
 
     let start_fen = config.start_fen.as_deref();
+    if let Some(result) = state.check_game_end(&config.white_name, &config.black_name) {
+        white.quit()?;
+        black.quit()?;
+        return Ok(MatchRecord {
+            result,
+            move_count: 0,
+            move_history: vec![],
+            final_fen: state.fen(),
+        });
+    }
 
     for move_num in 1..=config.max_moves {
         for side in &[Color::White, Color::Black] {

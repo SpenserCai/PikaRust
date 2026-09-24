@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn test_knight_attack_empty_board() {
         let attacks = lame_leaper_attack_knight(Square::SQ_E4, Bitboard::EMPTY);
-        assert!(attacks.popcount() == 8);
+        assert_eq!(attacks.popcount(), 8);
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         let attacks = lame_leaper_attack_knight(Square::SQ_E4, occ);
         assert!(!attacks.contains(Square::SQ_D6));
         assert!(!attacks.contains(Square::SQ_F6));
-        assert!(attacks.popcount() == 6);
+        assert_eq!(attacks.popcount(), 6);
     }
 
     #[test]

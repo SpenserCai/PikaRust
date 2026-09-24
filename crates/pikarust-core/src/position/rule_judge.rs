@@ -87,6 +87,11 @@ impl Position {
                             return RuleJudgeResult::Definitive(result);
                         }
 
+                        // The Bloom filter may overestimate occurrences. Keep
+                        // the exact two-fold score even if a collision requires
+                        // scanning farther without finding another match.
+                        two_fold_result = Some(result);
+
                         if self.bloom_filter.count(self.state.key) <= 1 {
                             if self.state.rule60 < 120 {
                                 let prev_key = self.state_at(1).map_or(0, |s| s.key);
@@ -109,7 +114,6 @@ impl Position {
                                     }
                                 }
                             }
-                            two_fold_result = Some(result);
                             break;
                         }
                     }
@@ -258,7 +262,8 @@ enum DrawLevel {
 mod tests {
     use super::RuleJudgeResult;
     use crate::position::Position;
-    use crate::types::{Move, Square, VALUE_DRAW, VALUE_MATE};
+    use crate::position::state::BLOOM_FILTER_SIZE;
+    use crate::types::{Move, Square, VALUE_DRAW, VALUE_MATE, mated_in};
 
     #[test]
     fn test_rule_judge_no_repetition_start_pos() {
@@ -378,5 +383,44 @@ mod tests {
                 // Acceptable — depends on bloom filter state
             }
         }
+    }
+
+    #[test]
+    fn test_rule_judge_preserves_two_fold_with_bloom_collision() {
+        let mut pos = Position::from_fen("3k5/3R5/9/9/9/4P4/9/9/9/4K4 b - - 0 1")
+            .expect("valid perpetual-check position");
+        let moves = [
+            Move::make(Square::SQ_D9, Square::SQ_E9),
+            Move::make(Square::SQ_D8, Square::SQ_E8),
+            Move::make(Square::SQ_E9, Square::SQ_D9),
+            Move::make(Square::SQ_E8, Square::SQ_D8),
+            Move::make(Square::SQ_D9, Square::SQ_E9),
+        ];
+        for m in moves {
+            assert!(pos.is_legal(m), "perpetual-check cycle must be legal");
+            let gives_check = pos.gives_check(m);
+            pos.do_move(m, gives_check);
+        }
+
+        let key = pos.state.key;
+        assert_eq!(pos.bloom_filter.count(key), 1);
+        assert_eq!(
+            pos.state_stack
+                .iter()
+                .filter(|state| state.key == key)
+                .count(),
+            1,
+            "the current position must have exactly one earlier occurrence"
+        );
+        assert_eq!(pos.rule_judge(5), RuleJudgeResult::Definitive(mated_in(5)));
+
+        // A distinct full key sharing the Bloom slot prevents the early proof
+        // that there cannot be a third occurrence. It must not erase the
+        // provisional score from the exact two-fold match already found.
+        let colliding_key = key ^ BLOOM_FILTER_SIZE as u64;
+        assert_ne!(colliding_key, key);
+        pos.bloom_filter.insert(colliding_key);
+        assert_eq!(pos.bloom_filter.count(key), 2);
+        assert_eq!(pos.rule_judge(5), RuleJudgeResult::TwoFold(mated_in(5)));
     }
 }
