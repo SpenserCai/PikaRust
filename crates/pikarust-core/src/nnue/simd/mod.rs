@@ -141,12 +141,18 @@ macro_rules! dispatch {
             #[cfg(target_arch = "aarch64")]
             SimdBackend::Neon => neon::Neon::$method($($arg),*),
             #[cfg(target_arch = "x86_64")]
-            SimdBackend::Avx2 => avx2::Avx2::$method($($arg),*),
+            // SAFETY: Dispatch's private backend is set only by CPU detection
+            // or with_backend's support check. AVX2 kernels validate their own
+            // slice contracts; the caller need not uphold any memory invariant.
+            SimdBackend::Avx2 => unsafe { avx2::Avx2::$method($($arg),*) },
         }
     };
 }
 
 /// CPU-checked NNUE operations with the input contracts documented by [`SimdOps`].
+///
+/// Architecture-specific code is isolated behind runtime detection; callers do
+/// not need global CPU flags or an unsafe API to use a portable release build.
 pub struct Dispatch {
     backend: SimdBackend,
 }
@@ -597,6 +603,179 @@ mod tests {
             let mut actual = [0; 512];
             d.transform_features(&psq, &threat, &mut actual);
             assert_eq!(actual, expected, "{}", d.backend());
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_all_vector_operations() {
+        let values16 = [i16::MIN, i16::MAX, -128, -1, 0, 1, 127];
+        let values32 = [i32::MIN, i32::MAX, -1, 0, 1];
+        for d in supported_dispatches() {
+            for len in [0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 65, 1024] {
+                let mut actual16: Vec<_> =
+                    (0..len + 2).map(|i| values16[i % values16.len()]).collect();
+                let mut expected16 = actual16.clone();
+                let rhs16: Vec<_> = (0..len + 2)
+                    .map(|i| values16[(i + 3) % values16.len()])
+                    .collect();
+                let weights: Vec<_> = (0..len + 2).map(|i| (i * 97) as i8).collect();
+                let range = 1..=len;
+                d.vec_add_i16(&mut actual16[range.clone()], &rhs16[range.clone()]);
+                scalar::Scalar::vec_add_i16(&mut expected16[range.clone()], &rhs16[range.clone()]);
+                assert_eq!(actual16, expected16, "{} add length {len}", d.backend());
+                d.vec_sub_i16(&mut actual16[range.clone()], &rhs16[range.clone()]);
+                scalar::Scalar::vec_sub_i16(&mut expected16[range.clone()], &rhs16[range.clone()]);
+                assert_eq!(actual16, expected16, "{} sub length {len}", d.backend());
+                d.vec_add_i16_widening(&mut actual16[range.clone()], &weights[range.clone()]);
+                scalar::Scalar::vec_add_i16_widening(
+                    &mut expected16[range.clone()],
+                    &weights[range.clone()],
+                );
+                assert_eq!(
+                    actual16,
+                    expected16,
+                    "{} widen add length {len}",
+                    d.backend()
+                );
+                d.vec_sub_i16_widening(&mut actual16[range.clone()], &weights[range.clone()]);
+                scalar::Scalar::vec_sub_i16_widening(
+                    &mut expected16[range.clone()],
+                    &weights[range.clone()],
+                );
+                assert_eq!(
+                    actual16,
+                    expected16,
+                    "{} widen sub length {len}",
+                    d.backend()
+                );
+
+                let mut actual32: Vec<_> =
+                    (0..len + 2).map(|i| values32[i % values32.len()]).collect();
+                let mut expected32 = actual32.clone();
+                let rhs32: Vec<_> = (0..len + 2)
+                    .map(|i| values32[(i + 2) % values32.len()])
+                    .collect();
+                d.vec_add_i32(&mut actual32[range.clone()], &rhs32[range.clone()]);
+                scalar::Scalar::vec_add_i32(&mut expected32[range.clone()], &rhs32[range.clone()]);
+                assert_eq!(actual32, expected32, "{} add length {len}", d.backend());
+                assert_eq!(
+                    d.horizontal_sum_i32(&actual32[range.clone()]),
+                    scalar::Scalar::horizontal_sum_i32(&expected32[range.clone()]),
+                );
+                d.vec_sub_i32(&mut actual32[range.clone()], &rhs32[range.clone()]);
+                scalar::Scalar::vec_sub_i32(&mut expected32[range.clone()], &rhs32[range]);
+                assert_eq!(actual32, expected32, "{} sub length {len}", d.backend());
+            }
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_unaligned_transform_and_extreme_activations() {
+        let values = [i16::MIN, i16::MAX, -100, 0, 100, 255];
+        let psq: Vec<_> = (0..1026).map(|i| values[i % values.len()]).collect();
+        let threat: Vec<_> = (0..1026)
+            .map(|i| values[(i / values.len()) % values.len()])
+            .collect();
+        let extremes = [i32::MIN, i32::MAX, -8128, -1, 0, 1, 8128];
+        let input: Vec<_> = (0..67).map(|i| extremes[i % extremes.len()]).collect();
+        for d in supported_dispatches() {
+            let mut actual = [42; 514];
+            let mut expected = actual;
+            d.transform_features(&psq[1..1025], &threat[1..1025], &mut actual[1..513]);
+            scalar::Scalar::transform_features(
+                &psq[1..1025],
+                &threat[1..1025],
+                &mut expected[1..513],
+            );
+            assert_eq!(actual, expected, "{} transform", d.backend());
+            for shift in [0, 1, 6, 12, 28, 31] {
+                d.clipped_relu(&input[1..66], &mut actual[1..66], shift);
+                scalar::Scalar::clipped_relu(&input[1..66], &mut expected[1..66], shift);
+                assert_eq!(actual, expected, "{} activation {shift}", d.backend());
+                if shift <= 28 {
+                    d.sqr_clipped_relu(&input[1..66], &mut actual[1..66], shift);
+                    scalar::Scalar::sqr_clipped_relu(&input[1..66], &mut expected[1..66], shift);
+                    assert_eq!(actual, expected, "{} squared {shift}", d.backend());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_unaligned_dense_and_sparse_affine() {
+        for d in supported_dispatches() {
+            for (in_dim, out_dim) in [
+                (0, 0),
+                (0, 32),
+                (3, 17),
+                (31, 32),
+                (32, 1),
+                (64, 32),
+                (1024, 32),
+            ] {
+                let input: Vec<_> = (0..in_dim + 2)
+                    .map(|i| if i % 5 == 0 { 0 } else { (i * 97) as u8 })
+                    .collect();
+                let weights: Vec<_> = (0..in_dim * out_dim + 2).map(|i| (i * 71) as i8).collect();
+                let biases: Vec<_> = (0..out_dim + 2)
+                    .map(|i| if i % 2 == 0 { i32::MAX } else { i32::MIN })
+                    .collect();
+                let input = &input[1..=in_dim];
+                let weights = &weights[1..=in_dim * out_dim];
+                let biases = &biases[1..=out_dim];
+                let mut actual = vec![42; out_dim + 2];
+                let mut expected = actual.clone();
+                d.affine_propagate(
+                    input,
+                    weights,
+                    biases,
+                    &mut actual[1..=out_dim],
+                    in_dim,
+                    out_dim,
+                );
+                scalar::Scalar::affine_propagate(
+                    input,
+                    weights,
+                    biases,
+                    &mut expected[1..=out_dim],
+                    in_dim,
+                    out_dim,
+                );
+                assert_eq!(actual, expected, "{} dense {in_dim}x{out_dim}", d.backend());
+                let indices: Vec<_> = (0..in_dim.div_ceil(4)).collect();
+                actual.fill(42);
+                d.affine_propagate_sparse(
+                    input,
+                    weights,
+                    biases,
+                    &mut actual[1..=out_dim],
+                    out_dim,
+                    &indices,
+                );
+                assert_eq!(
+                    actual,
+                    expected,
+                    "{} sparse {in_dim}x{out_dim}",
+                    d.backend()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backends_match_scalar_for_unaligned_nnz_blocks() {
+        for d in supported_dispatches() {
+            for len in [0, 4, 8, 16, 32, 64, 1024] {
+                let input: Vec<_> = (0..len + 2)
+                    .map(|i| if i % 11 == 0 { 255_u8 } else { 0 })
+                    .collect();
+                let mut actual = [usize::MAX; MAX_NNZ];
+                let mut expected = actual;
+                let count = d.find_nnz(&input[1..=len], &mut actual);
+                let expected_count = scalar::Scalar::find_nnz(&input[1..=len], &mut expected);
+                assert_eq!(count, expected_count);
+                assert_eq!(actual, expected, "{} length {len}", d.backend());
+            }
         }
     }
 }
