@@ -16,10 +16,14 @@ scripts/setup-pikafish.sh --verify-model
 scripts/setup-pikafish.sh
 ```
 
-The reference script verifies the digest before building. It uses a clean,
-detached checkout at the pinned commit and records the reference binary digest
-and build architecture in `tests/fixtures/pikafish/reference.json`. Source and
-build outputs under that directory are ignored by Git.
+The reference script verifies the digest before building. Each invocation makes
+a fresh local clone of the verified source, checks out the pinned commit, and
+builds there. This local clone requires no network access and excludes old
+objects and untracked analysis files. The temporary build directory is removed
+on exit; the source checkout remains available for inspection without being
+cleaned or built in. The script records the reference binary digest and build
+architecture in `tests/fixtures/pikafish/reference.json`. Source and build
+outputs under that directory are ignored by Git.
 
 For source inspection without a C++ build:
 
@@ -33,6 +37,11 @@ the exact pin. The script refuses a mismatched or modified checkout rather than
 resetting another developer's work. `BUILD_JOBS` controls build concurrency;
 `PIKAFISH_ARCH` overrides the reference build architecture. Generic x86-64 is the
 default on x86-64, so setup does not assume AVX2 support.
+
+`PIKAFISH_OUTPUT_DIR` selects the directory for `bin/pikafish`, its model, and
+`reference.json`; relative paths resolve from the repository root. The default
+is `tests/fixtures/pikafish`. This does not change the default source checkout.
+E2E uses the same variable to locate and verify an existing reference build.
 
 `PIKARUST_NNUE_MODEL` can select another location for the same pinned model in
 reference tooling. This is distinct from the native CLI's
@@ -290,7 +299,18 @@ claim; they are generated artifacts and do not belong in tracked documentation.
 An explicit output directory must be new; the script refuses to overwrite a
 previous experiment.
 
+Each comparison publishes its reference under its own output directory's
+`reference/`, overriding an external `PIKAFISH_OUTPUT_DIR` for that build. To
+reuse that exact binary and metadata in E2E:
+
+```sh
+PIKAFISH_OUTPUT_DIR=target/bench/review/reference \
+  scripts/run-e2e.sh --suite alignment
+```
+
 Run benchmarks on equivalent release builds on the same otherwise idle machine.
+Do not overlap benchmark runs with other builds or searches, and do not run
+reference setup concurrently with a comparison that uses its output directory.
 Record elapsed time, node count, NPS, and the active evaluation backend. A faster
 result with a changed search tree needs separate algorithm and strength
 analysis. Exact benchmark output only establishes agreement for the stated

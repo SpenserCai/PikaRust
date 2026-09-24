@@ -245,10 +245,13 @@ def prepare(args, output, report):
     requested = args.reference_arch or os.environ.get("PIKAFISH_ARCH")
     architecture = select_reference_arch(build_info, requested)
     env["PIKAFISH_ARCH"] = architecture
+    # A comparison owns its reference output even when the caller configures
+    # another shared fixture directory for subsequent E2E runs.
+    fixtures = output / "reference"
+    env["PIKAFISH_OUTPUT_DIR"] = str(fixtures)
     setup = [str(ROOT / "scripts/setup-pikafish.sh")]
     print(f"Building pinned reference ({architecture}); see reference-build.log", flush=True)
     run_logged(setup, output / "reference-build.log", env=env)
-    fixtures = ROOT / "tests/fixtures/pikafish"
     reference_meta = json.loads((fixtures / "reference.json").read_text())
     require(reference_meta["commit"] == pin["PIKAFISH_COMMIT"] and
             reference_meta["nnue_sha256"] == pin["PIKAFISH_NNUE_SHA256"] and
@@ -260,9 +263,9 @@ def prepare(args, output, report):
     compiler = command_output([str(reference)], cwd=inputs, input_text="compiler\nquit\n")
     require(re.search(rf"Compilation architecture\s*:\s*{re.escape(architecture)}\s*$", compiler, re.M),
             "Reference binary does not report the requested compilation architecture")
-    source = Path(env.get("PIKAFISH_SOURCE_DIR", fixtures / "source")).resolve()
+    source = Path(env.get("PIKAFISH_SOURCE_DIR", ROOT / "tests/fixtures/pikafish/source")).resolve()
     report["reference"] = dict(reference_meta, repository=pin["PIKAFISH_REPOSITORY"],
-                               source=str(source), compiler=compiler, build_command=setup)
+                               source=str(source), output=str(fixtures), compiler=compiler, build_command=setup)
     report["comparison_scope"] = (
         "Same NNUE backend ISA, pinned model, single-thread release builds. Compiler implementations "
         "and flags differ; inspect build logs. Timing is observational, not an Elo or speed threshold gate."

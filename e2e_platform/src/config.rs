@@ -35,12 +35,18 @@ pub struct E2eConfig {
 impl E2eConfig {
     /// Build config from the project root path.
     pub fn from_project_root(root: &Path) -> Self {
+        let reference_dir = std::env::var_os("PIKAFISH_OUTPUT_DIR")
+            .filter(|path| !path.is_empty())
+            .map_or_else(
+                || root.join("tests/fixtures/pikafish"),
+                |path| root.join(path),
+            );
         Self {
             pikarust_bin: std::env::var_os("PIKARUST_BIN")
                 .map_or_else(|| root.join("target/release/pikarust"), PathBuf::from),
             pikarust_cwd: root.to_path_buf(),
-            pikafish_bin: root.join("tests/fixtures/pikafish/bin/pikafish"),
-            pikafish_cwd: root.join("tests/fixtures/pikafish/bin"),
+            pikafish_bin: reference_dir.join("bin/pikafish"),
+            pikafish_cwd: reference_dir.join("bin"),
             nnue_model: std::env::var_os("PIKARUST_NNUE_MODEL")
                 .map_or_else(|| root.join("models/pikafish.nnue"), PathBuf::from),
             default_timeout: Duration::from_secs(10),
