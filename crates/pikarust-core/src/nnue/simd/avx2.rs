@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
+// Copyright (c) 2026 SpenserCai and PikaRust contributors
+// Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
+
 use std::arch::x86_64::{
     _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_shuffle_epi32, _mm_storeu_si128,
     _mm_unpackhi_epi64, _mm256_add_epi16, _mm256_add_epi32, _mm256_adds_epi16,

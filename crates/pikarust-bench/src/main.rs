@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Benchmark positions from Pikafish src/benchmark.cpp.
+// Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
+// Rust adaptation and modifications, 2026; see NOTICE.md and LICENSE.
+
 #![forbid(unsafe_code)]
 
 use std::{error::Error, path::PathBuf, process::ExitCode, time::Instant};

@@ -12,7 +12,7 @@ members = [
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["PikaRust Team"]
 rust-version = "1.85"
 repository = "https://github.com/SpenserCai/PikaRust"

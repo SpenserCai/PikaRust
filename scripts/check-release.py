@@ -30,11 +30,15 @@ def check_frontend_version(version: str) -> None:
             raise ValueError(f"frontend {label}: version must equal workspace version {version}")
         if package.get("name") != manifest["name"]:
             raise ValueError(f"frontend {label}: package name must match package.json")
+        if label != "package-lock.json" and package.get("license") != "MIT":
+            raise ValueError(f"frontend {label}: license must remain MIT")
 
 
 def validate_workspace() -> dict:
     workspace = read_toml(ROOT / "Cargo.toml")["workspace"]
     package = workspace["package"]
+    if package.get("license") != "GPL-3.0-or-later":
+        raise ValueError("engine workspace license must be GPL-3.0-or-later; historical MIT engine releases are unsupported")
     version = package["version"]
     if not SEMVER.fullmatch(version):
         raise ValueError(f"unsupported release version: {version}")
@@ -45,6 +49,10 @@ def validate_workspace() -> dict:
     for member in workspace["members"]:
         manifest = read_toml(ROOT / member / "Cargo.toml")["package"]
         members.append(manifest["name"])
+        expected_license = "MIT" if manifest["name"] in ("pikarust-uci", "pikarust-bridge") else "GPL-3.0-or-later"
+        actual_license = package["license"] if manifest.get("license") == {"workspace": True} else manifest.get("license")
+        if actual_license != expected_license:
+            raise ValueError(f"{member}: package.license must be {expected_license}")
         for key in ("version", "edition", "rust-version"):
             if manifest.get(key) != {"workspace": True}:
                 raise ValueError(f"{member}: package.{key} must inherit from workspace")

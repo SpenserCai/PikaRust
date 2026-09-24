@@ -5,6 +5,12 @@ The **Release** GitHub Action runs only by manual dispatch. It reads
 `v<version>`, and creates the tag after validating the build artifacts. A CI
 completion does not trigger release preparation.
 
+The engine and native applications are `GPL-3.0-or-later`; the independent MIT
+components and NNUE model retain their separate terms. Follow the
+[licensing policy](licensing.md) when distributing artifacts. Release checks
+require the current component license declarations and notices; an older source
+revision declaring the combined engine MIT is not eligible for publication.
+
 ## Prepare and run a release
 
 1. Update the workspace version and workspace path-dependency versions together.
@@ -49,24 +55,48 @@ profile, and portable target configuration. GNU/Linux binaries are dynamically
 linked and use the workflow's Ubuntu baseline; compatibility with every older
 Linux distribution is not implied.
 
-Application archives include executables, license notices, model setup
-instructions, reference pins, documentation, and `build.json` containing the
-version, exact commit, target, compiler, and model exclusion. The release also
-includes a Git source archive and SHA-256 checksum files. Archive validation
-requires the complete expected set, correct checksums and embedded source
-identity, and no model weights. A Git LFS pointer in the source archive is not
-a bundled NNUE network. The source archive is not a vendored offline build
-environment.
+Application archives include executables, `LICENSE`, `LICENSE-MIT`, `NOTICE.md`,
+upstream and dependency notices, model setup instructions, reference pins, and
+documentation. Their `build.json` records the version, exact commit, target,
+compiler, GPL code license, model exclusion, and the matching source archive.
+
+Each release includes a corresponding source archive and SHA-256 checksum files.
+The archive contains that commit's source, build scripts, lockfile, vendored
+Cargo dependency sources and licenses, and an offline Cargo source configuration.
+The Rust toolchain and native build tools must be installed separately. Archive
+validation requires the complete expected set, correct checksums and embedded
+source identity, and no model weights. A Git LFS pointer in the source archive
+is not a bundled NNUE network. Preserve the matching source asset alongside
+every native binary distribution.
+
+To rebuild the native applications from a downloaded source archive, first
+install the Rust toolchain named in its `rust-toolchain.toml` and the native
+build tools for your platform. Set the version to match that archive:
+
+```sh
+release_version=0.1.0
+tar -xzf "pikarust-${release_version}-source.tar.gz"
+cd "pikarust-${release_version}-source"
+cargo build --offline --locked --release -p pikarust-app --features server --bins
+```
+
+The included `vendor/` and `.cargo/config.toml` supply Cargo dependencies without
+network access. NNUE weights are obtained separately for runtime use; follow the
+[model setup instructions](../models/README.md).
 
 NNUE weights have separate terms and are excluded from application archives.
-Source notices, including obligations applicable to upstream-derived code,
-retain their own scope. Release automation does not change those declarations
-or establish distribution clearance. All crates remain `publish = false`;
-this action does not run `cargo publish` or publish Python/npm bindings.
+GPL, MIT, dependency notices, and model terms retain their documented scopes.
+Artifact checks verify package contents and source identity; they do not grant
+additional rights. All crates remain `publish = false`; this action does not
+run `cargo publish` or publish Python/npm bindings.
 
 The frontend and web bridge are not packaged in these native archives. Build
-the local web bundle from source with `scripts/build-web.sh`; that bundle
-includes the selected model and its terms.
+the local web bundle from a clean committed checkout with `scripts/build-web.sh`.
+It includes the GPL engine, MIT bridge and frontend, selected model and original
+terms, license notices, and matching source archive and checksum. The builder
+checks source cleanliness and commit stability before and after packaging.
+For uncommitted development, use the
+[bridge and frontend development commands](../CONTRIBUTING.md#local-web-development).
 
 ## Drafts, retries, and immutable versions
 
@@ -74,6 +104,8 @@ Both modes initially create a draft. `publish` changes it to a public release
 only after the complete uploaded asset set matches the verified local files.
 The action never moves an existing tag or overwrites a published release.
 A version assigned to another commit requires a new workspace version.
+An older draft cannot be repurposed to publish a different revision or bypass
+the current source-license requirements.
 
 A draft can be resumed at its original eligible commit. Existing assets with
 identical SHA-256 digests are retained, and only missing assets are uploaded.
@@ -94,7 +126,8 @@ restrictions on tag creation or release publication.
 ## Local package validation
 
 The packaging and verification commands do not require a GitHub token and do
-not create tags or releases. For an already built native target:
+not create tags or releases. Start with a clean committed checkout so that the
+binary, notices, and corresponding source identify the same revision:
 
 ```sh
 cargo build --locked --release -p pikarust-app --features server --bins \

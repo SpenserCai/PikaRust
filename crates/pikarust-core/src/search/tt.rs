@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
+// Copyright (c) 2026 SpenserCai and PikaRust contributors
+// Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
+
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicUsize, Ordering};
 
 use crate::types::{Bound, DEPTH_NONE, Depth, Key, Move, VALUE_NONE, Value};

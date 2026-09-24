@@ -42,9 +42,10 @@ The weights retain the original
 [Pikafish Networks terms](https://github.com/official-pikafish/Networks#nnue-license),
 reproduced in [LICENSE-NNUE](LICENSE-NNUE). They require lawful use and permission
 for commercial use, and also apply to weights derived from Pikafish's network.
-Keep these terms with any model distribution. PikaRust's MIT declaration for
-original source contributions does not change the model's license or grant
-commercial permission.
+Keep these terms with any model distribution. Neither the engine's GPL license
+nor the independent components' MIT license changes the model's terms or grants
+commercial permission. See the
+[component licensing policy](../docs/licensing.md) for code licenses.
 
 ## Updating the reference
 

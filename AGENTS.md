@@ -137,6 +137,12 @@ results without committing screenshots or session logs as documentation.
 
 ## Versions and distribution
 
+- Follow `docs/licensing.md`. The workspace/core/app/bench/E2E default is
+  `GPL-3.0-or-later`; only `crates/uci-rs`, `pikarust-web/bridge`, and
+  `pikarust-web/frontend` retain MIT as independent components. Do not add GPL
+  engine code or a core dependency to an MIT component without updating its
+  license scope, notices, metadata, and packaging. Future bindings that link
+  the core follow its GPL license.
 - Follow `docs/releases.md`. The workspace version drives releases; synchronize
   internal dependency versions and applicable frontend package metadata.
 - Keep release builds portable; do not publish binaries built with
@@ -145,7 +151,17 @@ results without committing screenshots or session logs as documentation.
   version, and verifies the selected main-branch commit's successful CI. Draft
   and publication modes share immutable tags and artifact validation. Do not
   create a tag, publish packages, or publish a release merely to test the workflow.
-- Preserve all existing license notices. The repository declaration, upstream
-  Pikafish/Stockfish licenses, and NNUE weight terms are distinct. Do not assert
-  that the repository declaration resolves upstream provenance, or enable
-  registry publishing before maintainers resolve the distribution requirements.
+- Preserve `LICENSE`, `LICENSE-MIT`, `NOTICE.md`, upstream notices, and the model's
+  original terms with their documented scopes. Record imported source revisions,
+  attribution, modification descriptions, and dates. Do not describe a Rust
+  translation as removing upstream GPL obligations or claim that old MIT
+  declarations retroactively cleared third-party rights.
+- GPL binary distributions require corresponding source for the same revision,
+  including required dependency sources, licenses, and build instructions.
+  When a published dependency omits license files, retain verified upstream
+  texts and their exact origin in `notices/dependency-supplements/<name>-<version>`;
+  update these records with the dependency and never alter vendored checksums.
+  Distribution bundles require clean, stable committed source; use normal
+  `cargo` and frontend dev commands for uncommitted development. Keep NNUE
+  weights separate from code licensing and excluded from native release archives.
+  Registry publishing remains disabled until explicitly reviewed.
