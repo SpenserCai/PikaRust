@@ -92,7 +92,8 @@ def dependency_notices(vendor: Path, stage: Path) -> None:
             raise ValueError(f"{crate.name}: no dependency license or copyright text was packaged")
         notices = {}
         for path in sorted(paths):
-            relative = path.relative_to(origin.resolve() if path.is_absolute() else origin).as_posix()
+            # Normalize both sides: macOS aliases /var through /private/var.
+            relative = path.resolve().relative_to(origin.resolve()).as_posix()
             target = stage / "notices/dependencies" / crate.name / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)

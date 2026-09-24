@@ -430,6 +430,25 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(notices[0]["notice_source"], "supplement")
         self.assertIn("SOURCE.md", notices[0]["files"])
 
+    def test_dependency_notices_accept_noncanonical_directory_paths(self):
+        vendor = self.root / "target/vendor"
+        self.fixture_vendor(vendor)
+        aliases = [vendor / ".." / vendor.name]
+        if os.name != "nt":
+            # macOS temporary directories use /var -> /private/var aliases.
+            linked = self.root / "target/vendor-link"
+            linked.symlink_to(vendor, target_is_directory=True)
+            aliases.append(linked)
+        for index, alias in enumerate(aliases):
+            with self.subTest(alias=alias):
+                stage = self.output / str(index)
+                release.dependency_notices(alias, stage)
+                original = vendor / "dependency-1.0.0/LICENSE"
+                copied = stage / "notices/dependencies/dependency-1.0.0/LICENSE"
+                self.assertEqual(copied.read_bytes(), original.read_bytes())
+                notices = json.loads((stage / "notices/dependencies/manifest.json").read_text())
+                self.assertEqual(notices[0]["files"]["LICENSE"], release.digest(original))
+
     def test_distribution_rejects_tracked_and_untracked_dirty_source(self):
         self.assertEqual(release.clean_commit(), self.sha)
         readme = self.root / "README.md"
