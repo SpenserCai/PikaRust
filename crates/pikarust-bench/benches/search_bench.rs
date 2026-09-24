@@ -19,7 +19,7 @@ fn bench_search_depth1(c: &mut Criterion) {
                 depth: Some(1),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits).wait())
+            std::hint::black_box(engine.go(&limits).wait())
         });
     });
 }
@@ -35,7 +35,7 @@ fn bench_search_depth2(c: &mut Criterion) {
                 depth: Some(2),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits).wait())
+            std::hint::black_box(engine.go(&limits).wait())
         });
     });
 }
@@ -53,7 +53,7 @@ fn bench_search_depth3(c: &mut Criterion) {
                 depth: Some(3),
                 ..SearchLimits::default()
             };
-            criterion::black_box(engine.go(&limits).wait())
+            std::hint::black_box(engine.go(&limits).wait())
         });
     });
     group.finish();
@@ -64,7 +64,7 @@ fn bench_evaluate_simple(c: &mut Criterion) {
     let pos = pikarust_core::position::Position::from_fen(STARTPOS).expect("valid fen");
 
     c.bench_function("evaluate_simple_startpos", |b| {
-        b.iter(|| criterion::black_box(evaluate_simple(criterion::black_box(&pos), 0)));
+        b.iter(|| std::hint::black_box(evaluate_simple(std::hint::black_box(&pos), 0)));
     });
 }
 
@@ -80,8 +80,8 @@ fn bench_tt_probe(c: &mut Criterion) {
 
     c.bench_function("tt_probe_hit", |b| {
         b.iter(|| {
-            let r = tt.probe(criterion::black_box(key));
-            criterion::black_box(r.found)
+            let r = tt.probe(std::hint::black_box(key));
+            std::hint::black_box(r.found)
         });
     });
 }
@@ -91,8 +91,8 @@ fn bench_tt_probe_miss(c: &mut Criterion) {
 
     c.bench_function("tt_probe_miss", |b| {
         b.iter(|| {
-            let r = tt.probe(criterion::black_box(0xCAFE_BABE_0000_0001));
-            criterion::black_box(r.found)
+            let r = tt.probe(std::hint::black_box(0xCAFE_BABE_0000_0001));
+            std::hint::black_box(r.found)
         });
     });
 }

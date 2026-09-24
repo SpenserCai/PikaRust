@@ -12,9 +12,9 @@ fn bench_magic_rook_attacks(c: &mut Criterion) {
 
     c.bench_function("magic_rook_attacks", |b| {
         b.iter(|| {
-            criterion::black_box(attacks_bb_rook(
-                criterion::black_box(sq),
-                criterion::black_box(occ),
+            std::hint::black_box(attacks_bb_rook(
+                std::hint::black_box(sq),
+                std::hint::black_box(occ),
             ))
         });
     });
@@ -28,7 +28,7 @@ fn bench_magic_rook_all_squares(c: &mut Criterion) {
         b.iter(|| {
             for i in 0..90u8 {
                 let sq = Square::from_raw_unchecked(i);
-                criterion::black_box(attacks_bb_rook(sq, occ));
+                std::hint::black_box(attacks_bb_rook(sq, occ));
             }
         });
     });
@@ -41,9 +41,9 @@ fn bench_magic_cannon_attacks(c: &mut Criterion) {
 
     c.bench_function("magic_cannon_attacks", |b| {
         b.iter(|| {
-            criterion::black_box(attacks_bb_cannon(
-                criterion::black_box(sq),
-                criterion::black_box(occ),
+            std::hint::black_box(attacks_bb_cannon(
+                std::hint::black_box(sq),
+                std::hint::black_box(occ),
             ))
         });
     });
@@ -56,9 +56,9 @@ fn bench_magic_knight_attacks(c: &mut Criterion) {
 
     c.bench_function("magic_knight_attacks", |b| {
         b.iter(|| {
-            criterion::black_box(attacks_bb_knight(
-                criterion::black_box(sq),
-                criterion::black_box(occ),
+            std::hint::black_box(attacks_bb_knight(
+                std::hint::black_box(sq),
+                std::hint::black_box(occ),
             ))
         });
     });
@@ -68,7 +68,7 @@ fn bench_bitboard_popcount(c: &mut Criterion) {
     let bb = Bitboard::new(0x0123_4567_89AB_CDEF_0123);
 
     c.bench_function("bitboard_popcount", |b| {
-        b.iter(|| criterion::black_box(criterion::black_box(bb).popcount()));
+        b.iter(|| std::hint::black_box(std::hint::black_box(bb).popcount()));
     });
 }
 
@@ -76,7 +76,7 @@ fn bench_bitboard_lsb(c: &mut Criterion) {
     let bb = Bitboard::new(0x0123_4567_89AB_CDEF_0100);
 
     c.bench_function("bitboard_lsb", |b| {
-        b.iter(|| criterion::black_box(criterion::black_box(bb).lsb()));
+        b.iter(|| std::hint::black_box(std::hint::black_box(bb).lsb()));
     });
 }
 
@@ -86,11 +86,11 @@ fn bench_bitboard_iteration(c: &mut Criterion) {
     c.bench_function("bitboard_iterate_squares", |b| {
         b.iter(|| {
             let mut count = 0u32;
-            for sq in criterion::black_box(bb) {
-                criterion::black_box(sq);
+            for sq in std::hint::black_box(bb) {
+                std::hint::black_box(sq);
                 count += 1;
             }
-            criterion::black_box(count)
+            std::hint::black_box(count)
         });
     });
 }
@@ -101,10 +101,10 @@ fn bench_bitboard_ops(c: &mut Criterion) {
 
     c.bench_function("bitboard_and_or_xor", |bench| {
         bench.iter(|| {
-            let and = criterion::black_box(bb_a) & criterion::black_box(bb_b);
-            let or = criterion::black_box(bb_a) | criterion::black_box(bb_b);
-            let xor = criterion::black_box(bb_a) ^ criterion::black_box(bb_b);
-            criterion::black_box((and, or, xor))
+            let and = std::hint::black_box(bb_a) & std::hint::black_box(bb_b);
+            let or = std::hint::black_box(bb_a) | std::hint::black_box(bb_b);
+            let xor = std::hint::black_box(bb_a) ^ std::hint::black_box(bb_b);
+            std::hint::black_box((and, or, xor))
         });
     });
 }

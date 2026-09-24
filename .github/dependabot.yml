@@ -8,6 +8,10 @@ updates:
     groups:
       compatible:
         update-types: [minor, patch]
+    ignore:
+      # Criterion 0.8 requires Rust 1.86; the workspace MSRV is 1.85.
+      - dependency-name: criterion
+        versions: ['>=0.8, <0.9']
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -20,6 +24,18 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # typescript-eslint 8 supports TypeScript <6.1; revisit with its peer range.
+      - dependency-name: typescript
+        versions: ['>=6.1.0']
     groups:
+      # Include major updates so related peer dependencies move together.
+      react:
+        patterns: [react, react-dom, '@types/react', '@types/react-dom']
+      vite-tailwind:
+        patterns: [vite, '@vitejs/plugin-react', tailwindcss, '@tailwindcss/vite']
+      eslint-typescript:
+        patterns: [eslint, '@eslint/*', 'eslint-plugin-*', typescript-eslint, typescript]
       compatible:
+        patterns: ['*']
         update-types: [minor, patch]

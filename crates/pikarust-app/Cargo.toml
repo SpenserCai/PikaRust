@@ -30,7 +30,7 @@ log = { workspace = true }
 env_logger = { workspace = true }
 tokio = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-tower-http = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true, features = ["cors", "trace"] }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
