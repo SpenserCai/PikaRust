@@ -11,7 +11,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.2.0"
 license = "GPL-3.0-or-later"
 authors = ["PikaRust Team"]
 rust-version = "1.85"
@@ -20,8 +20,8 @@ readme = "README.md"
 publish = false
 
 [workspace.dependencies]
-pikarust-core = { path = "crates/pikarust-core", version = "0.1.0" }
-uci-rs = { package = "pikarust-uci", path = "crates/uci-rs", version = "0.1.0" }
+pikarust-core = { path = "crates/pikarust-core", version = "0.2.0" }
+uci-rs = { package = "pikarust-uci", path = "crates/uci-rs", version = "0.2.0" }
 
 thiserror = "2.0"
 log = "0.4"
