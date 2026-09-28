@@ -74,7 +74,7 @@ install the Rust toolchain named in its `rust-toolchain.toml` and the native
 build tools for your platform. Set the version to match that archive:
 
 ```sh
-release_version=0.1.0
+release_version=0.2.5
 tar -xzf "pikarust-${release_version}-source.tar.gz"
 cd "pikarust-${release_version}-source"
 cargo build --offline --locked --release -p pikarust-app --features server --bins

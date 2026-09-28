@@ -60,12 +60,13 @@ history retains the dates and authors of earlier modifications.
 
 On **2026-09-28**, the NNUE model decoder and network layers, search and evaluation
 heuristics, time management, histories and transposition table, and checked-move
-and null-move handling were adapted to the reference above. The previous
-`76239d0b06720bfa4588989fd4ac7573e9dbf887` reference and its model remain recorded in
-[scripts/reference-legacy.lock](scripts/reference-legacy.lock) for model
-compatibility checks. Both model formats retain their original terms. PikaRust's
-library and application boundaries remain Rust adaptations of the upstream
-engine, rather than copies of its platform-specific application infrastructure.
+and null-move handling were adapted to the reference above. The model decoder
+and propagation implement the current upstream architecture. Earlier references
+and weights remain available through source history; the current distribution
+does not include historical model formats. The model retains its original terms.
+PikaRust's library and application boundaries remain Rust adaptations of the
+upstream engine, rather than copies of its platform-specific application
+infrastructure.
 
 ## Independent MIT components
 

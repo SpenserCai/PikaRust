@@ -4,22 +4,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/pikafish"
-REFERENCE_LOCK="$SCRIPT_DIR/reference.lock"
-if [[ "${1:-}" == --legacy ]]; then
-    REFERENCE_LOCK="$SCRIPT_DIR/reference-legacy.lock"
-    FIXTURE_DIR="$FIXTURE_DIR/legacy"
-    shift
-fi
 usage() {
-    echo "Usage: $0 [--legacy] [build | --source-only | --verify-model]" >&2
+    echo "Usage: $0 [build | --source-only | --verify-model]" >&2
     exit 2
 }
 [[ $# -le 1 ]] || usage
 action="${1:-build}"
 case "$action" in build|--source-only|--verify-model) ;; *) usage ;; esac
-# Both reviewed lockfiles use the same schema; no environment-selected pin.
+# Only the reviewed current lock selects reference inputs.
 # shellcheck source=scripts/reference.lock
-source "$REFERENCE_LOCK"
+source "$SCRIPT_DIR/reference.lock"
 SOURCE_DIR="${PIKAFISH_SOURCE_DIR:-$FIXTURE_DIR/source-${PIKAFISH_COMMIT:0:12}}"
 MODEL="${PIKARUST_NNUE_MODEL:-$PROJECT_ROOT/$PIKAFISH_NNUE_FILE}"
 OUTPUT_DIR="${PIKAFISH_OUTPUT_DIR:-$FIXTURE_DIR}"

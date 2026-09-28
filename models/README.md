@@ -27,33 +27,17 @@ The upstream `master-net` release is a rolling download. Use the repository's LF
 object to obtain the model matching this digest, rather than substituting the
 current release asset.
 
-## Retained previous model
+## Supported format
 
-The preceding model remains available at
-`models/pikafish-legacy-92b5fb5d.nnue` for compatibility checks and migration.
-It reuses the existing Git LFS object; its bytes and terms are unchanged.
+PikaRust follows the pinned upstream NNUE architecture: version `0x6A448AFA`
+with matching feature-transformer and network hashes. Like the current official
+loader, it rejects historical formats instead of selecting a compatibility
+implementation. The previous `0x7AF32F20` network is not supported.
 
-| Property | Value |
-| --- | --- |
-| SHA-256 | `92b5fb5d333800654377a93ad8d28d0b4c8b34fb9a3d1cdaafd6ecdfb3459bb2` |
-| Historical reference commit | `76239d0b06720bfa4588989fd4ac7573e9dbf887` |
-| Pin | [`scripts/reference-legacy.lock`](../scripts/reference-legacy.lock) |
-| Terms | [LICENSE-NNUE](LICENSE-NNUE) |
-
-Retrieve and verify it explicitly:
-
-```sh
-git lfs pull --include="models/pikafish-legacy-92b5fb5d.nnue"
-scripts/setup-pikafish.sh --legacy --verify-model
-```
-
-Both files can be loaded through the explicit model APIs below. The default
-model and all normal alignment and benchmark gates use the current pin. Loading
-the previous weights does not restore the previous search algorithm or promise
-its node counts. To reproduce the historical official engine with those weights,
-use `scripts/setup-pikafish.sh --legacy build`; its outputs are isolated from the
-current reference. Removing the retained model requires a separate reviewed
-change after migration; there is no automatic expiry.
+The repository tracks one reference model. Other structurally compatible models
+can be loaded explicitly, but normal alignment and benchmark gates require the
+exact digest above. Historical source revisions preserve the models and engine
+implementations used by earlier releases.
 
 ## Loading and distribution
 
@@ -80,9 +64,9 @@ commercial permission. See the
 
 1. Select an explicit official Pikafish commit and compatible model. Record their
    provenance and verify the applicable source and weight terms.
-2. Update the default LFS model and `scripts/reference.lock` together. Preserve
-   the retained previous model and its separate pin until an explicit removal
-   decision; do not replace its bytes with the new model.
+2. Update the LFS model, `scripts/reference.lock`, and supported decoder
+   architecture together. Remove obsolete format paths and document any change
+   in model compatibility.
 3. Update the digest, reference commit, and download provenance in this document.
 4. Rebuild the reference and derive numerical fixtures from that independently
    verified build. Review every changed expectation.

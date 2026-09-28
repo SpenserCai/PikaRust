@@ -159,7 +159,7 @@ mod tests {
     fn test_evaluate_uses_sum_of_network_outputs() {
         let pos = Position::start_pos().expect("start_pos should parse");
         // The current upstream scaling takes one raw NNUE value; the split is
-        // retained only to keep the legacy model evaluation API usable.
+        // preserved as PSQT and positional components in the diagnostic API.
         assert_eq!(evaluate(&pos, 500, 500, 0), 1178);
         assert_eq!(evaluate(&pos, 1000, 0, 0), 1178);
     }

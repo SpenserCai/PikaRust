@@ -18,16 +18,14 @@ uses Python 3; release tooling requires Python 3.11 or newer.
 git clone https://github.com/SpenserCai/PikaRust.git
 cd PikaRust
 git lfs install
-git lfs pull --include="models/*.nnue"
+git lfs pull --include="models/pikafish.nnue"
 scripts/setup-pikafish.sh --verify-model
-scripts/setup-pikafish.sh --legacy --verify-model
 cargo build --workspace --locked
 ```
 
-Verify both the current and retained legacy models before model-backed
-validation; compatibility tests require both LFS objects. A small text pointer
-under `models/` is not a model. A missing or different network must not be worked
-around by weakening tests.
+Verify the pinned model before model-backed validation. A small text pointer at
+`models/pikafish.nnue` is not the model. A missing or different network must not
+be worked around by weakening tests.
 
 ## Making a change
 

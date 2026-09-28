@@ -2,7 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
-// 2026-09-28: current Pikafish architecture and explicit legacy model decoding.
+// 2026-09-28: current Pikafish architecture with strict model validation.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::io::Read;
@@ -11,7 +11,6 @@ use std::path::Path;
 use thiserror::Error;
 
 pub const VERSION: u32 = 0x6A44_8AFA;
-const LEGACY_VERSION: u32 = 0x7AF3_2F20;
 pub const TRANSFORMED_DIMS: usize = 1024;
 pub const PSQ_DIMS: usize = 16_536;
 pub const THREAT_DIMS: usize = 45_547;
@@ -30,50 +29,21 @@ pub const KING_BUCKET_NB: usize = 6;
 
 const FC0_OUTPUTS: usize = L2_BIG;
 const FC1_INPUTS_PADDED: usize = 64;
-// Upstream NetworkArchitecture::get_hash_value(). Both supported architectures
-// have the same affine output sizes, so their architecture hashes coincide.
-// Version and feature-transformer hashes must also agree to select a format.
+const FC2_INPUTS: usize = L2_BIG * 2 + L3_BIG * 2;
+// Upstream NetworkArchitecture::get_hash_value(). The version and feature
+// transformer hash are checked separately, as in the official loader.
 const ARCHITECTURE_HASH: u32 = 0x6333_7116;
+const FEATURE_TRANSFORMER_HASH: u32 = super::features::full_threats::HASH_VALUE.rotate_left(1)
+    ^ super::features::half_ka_v2_hm::HASH_VALUE
+    ^ (TRANSFORMED_DIMS as u32 * 2);
 
 const LEB128_MAGIC: &[u8; 17] = b"COMPRESSED_LEB128";
-
-/// Supported on-disk NNUE architectures, selected by the file version and hashes.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ModelFormat {
-    /// Pikafish's 1024/32/32 network with concatenated hidden activations.
-    Current,
-    /// The 1024/31/32 network retained for existing model users.
-    Legacy,
-}
-
-impl ModelFormat {
-    const fn feature_hash(self) -> u32 {
-        let threat_hash = match self {
-            Self::Current => super::features::full_threats::HASH_VALUE,
-            Self::Legacy => 0x8F23_4CB8,
-        };
-        threat_hash.rotate_left(1)
-            ^ super::features::half_ka_v2_hm::HASH_VALUE
-            ^ (TRANSFORMED_DIMS as u32 * 2)
-    }
-
-    const fn fc2_inputs(self) -> usize {
-        match self {
-            Self::Current => 128,
-            Self::Legacy => 32,
-        }
-    }
-}
 
 #[derive(Debug, Error)]
 pub enum NnueError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error(
-        "unsupported NNUE version 0x{got:08X}; expected current 0x{:08X} or legacy 0x{:08X}",
-        VERSION,
-        LEGACY_VERSION
-    )]
+    #[error("unsupported NNUE version 0x{got:08X}; expected 0x{:08X}", VERSION)]
     InvalidVersion { got: u32 },
     #[error("invalid {section} NNUE hash: expected 0x{expected:08X}, got 0x{got:08X}")]
     InvalidHash {
@@ -113,18 +83,17 @@ pub struct LayerStackWeights {
 }
 
 pub struct NnueModel {
-    /// Architecture used to decode and evaluate these weights.
-    pub format: ModelFormat,
     pub description: String,
     pub ft: FeatureTransformerWeights,
     pub layer_stacks: Vec<LayerStackWeights>,
 }
 
 impl NnueModel {
-    /// Load a current or retained legacy model, validating all structural hashes.
+    /// Load a model for the current architecture, validating all structural hashes.
     ///
     /// Unknown versions, incompatible architectures, malformed parameter blocks,
-    /// and trailing data return an error without falling back to another format.
+    /// and trailing data return an error. Historical formats are unsupported,
+    /// matching the pinned official engine's loader.
     pub fn load(path: &Path) -> Result<Self, NnueError> {
         let compressed = std::fs::read(path)?;
         let decompressed =
@@ -137,31 +106,28 @@ impl NnueModel {
         let mut pos = 0;
 
         let version = read_u32(data, &mut pos)?;
-        let format = match version {
-            VERSION => ModelFormat::Current,
-            LEGACY_VERSION => ModelFormat::Legacy,
-            got => return Err(NnueError::InvalidVersion { got }),
-        };
+        if version != VERSION {
+            return Err(NnueError::InvalidVersion { got: version });
+        }
         read_hash(
             data,
             &mut pos,
-            format.feature_hash() ^ ARCHITECTURE_HASH,
+            FEATURE_TRANSFORMER_HASH ^ ARCHITECTURE_HASH,
             "network",
         )?;
         let desc_size = read_u32(data, &mut pos)? as usize;
         let description = read_string(data, &mut pos, desc_size)?;
 
-        let ft = read_feature_transformer(data, &mut pos, format)?;
+        let ft = read_feature_transformer(data, &mut pos)?;
         let mut layer_stacks = Vec::with_capacity(LAYER_STACKS);
         for _ in 0..LAYER_STACKS {
-            layer_stacks.push(read_layer_stack(data, &mut pos, format)?);
+            layer_stacks.push(read_layer_stack(data, &mut pos)?);
         }
         if pos != data.len() {
             return Err(NnueError::TrailingData { offset: pos });
         }
 
         Ok(Self {
-            format,
             description,
             ft,
             layer_stacks,
@@ -183,9 +149,8 @@ fn transpose_weights(src: &[i8], out_dim: usize, in_dim: usize) -> Box<[i8]> {
 fn read_feature_transformer(
     data: &[u8],
     pos: &mut usize,
-    format: ModelFormat,
 ) -> Result<FeatureTransformerWeights, NnueError> {
-    read_hash(data, pos, format.feature_hash(), "feature transformer")?;
+    read_hash(data, pos, FEATURE_TRANSFORMER_HASH, "feature transformer")?;
 
     let mut biases = Box::new([0i16; TRANSFORMED_DIMS]);
     let consumed = read_leb128_i16(data, *pos, biases.as_mut_slice())?;
@@ -197,23 +162,14 @@ fn read_feature_transformer(
 
     let threat_psqt_count = THREAT_DIMS * PSQT_BUCKETS;
     let mut threat_psqt_weights = vec![0i32; threat_psqt_count].into_boxed_slice();
-    if format == ModelFormat::Current {
-        *pos += read_leb128_i32(data, *pos, &mut threat_psqt_weights)?;
-    }
+    *pos += read_leb128_i32(data, *pos, &mut threat_psqt_weights)?;
 
     let psq_weight_count = PSQ_DIMS * TRANSFORMED_DIMS;
     let mut weights = vec![0i8; psq_weight_count].into_boxed_slice();
     read_i8_slice(data, pos, &mut weights)?;
 
     let mut psqt_weights = vec![0i32; PSQ_DIMS * PSQT_BUCKETS].into_boxed_slice();
-    if format == ModelFormat::Current {
-        *pos += read_leb128_i32(data, *pos, &mut psqt_weights)?;
-    } else {
-        let mut all_psqt = vec![0i32; threat_psqt_count + psqt_weights.len()];
-        *pos += read_leb128_i32(data, *pos, &mut all_psqt)?;
-        threat_psqt_weights.copy_from_slice(&all_psqt[..threat_psqt_count]);
-        psqt_weights.copy_from_slice(&all_psqt[threat_psqt_count..]);
-    }
+    *pos += read_leb128_i32(data, *pos, &mut psqt_weights)?;
 
     Ok(FeatureTransformerWeights {
         biases,
@@ -224,11 +180,7 @@ fn read_feature_transformer(
     })
 }
 
-fn read_layer_stack(
-    data: &[u8],
-    pos: &mut usize,
-    format: ModelFormat,
-) -> Result<LayerStackWeights, NnueError> {
+fn read_layer_stack(data: &[u8], pos: &mut usize) -> Result<LayerStackWeights, NnueError> {
     read_hash(data, pos, ARCHITECTURE_HASH, "layer stack")?;
 
     // fc_0: biases[32] as i32, weights[32*1024] as i8 (file: output-major)
@@ -247,11 +199,10 @@ fn read_layer_stack(
     read_i8_slice(data, pos, &mut fc1_weights_raw)?;
     let fc1_weights = transpose_weights(&fc1_weights_raw, L3_BIG, FC1_INPUTS_PADDED);
 
-    // fc_2: one output, 128 inputs in current models or 32 in legacy models.
+    // fc_2: one output, 128 concatenated hidden activations.
     let mut fc2_biases = Box::new([0i32; 1]);
     read_i32_slice(data, pos, fc2_biases.as_mut_slice())?;
-    let fc2_weight_count = format.fc2_inputs();
-    let mut fc2_weights = vec![0i8; fc2_weight_count].into_boxed_slice();
+    let mut fc2_weights = vec![0i8; FC2_INPUTS].into_boxed_slice();
     read_i8_slice(data, pos, &mut fc2_weights)?;
 
     Ok(LayerStackWeights {
@@ -445,56 +396,62 @@ mod tests {
             NnueModel::decode(&0u32.to_le_bytes()),
             Err(NnueError::InvalidVersion { got: 0 })
         ));
-        for (version, format) in [
-            (VERSION, ModelFormat::Current),
-            (LEGACY_VERSION, ModelFormat::Legacy),
-        ] {
-            let mut data = version.to_le_bytes().to_vec();
-            data.extend_from_slice(&0u32.to_le_bytes());
-            assert!(matches!(
-                NnueModel::decode(&data),
-                Err(NnueError::InvalidHash {
-                    section: "network",
-                    ..
-                })
-            ));
-            data[4..8].copy_from_slice(&(format.feature_hash() ^ ARCHITECTURE_HASH).to_le_bytes());
-            data.extend_from_slice(&0u32.to_le_bytes()); // empty description
-            data.extend_from_slice(&0u32.to_le_bytes()); // invalid feature hash
-            assert!(matches!(
-                NnueModel::decode(&data),
-                Err(NnueError::InvalidHash {
-                    section: "feature transformer",
-                    ..
-                })
-            ));
-            assert!(matches!(
-                read_layer_stack(&0u32.to_le_bytes(), &mut 0, format),
-                Err(NnueError::InvalidHash {
-                    section: "layer stack",
-                    ..
-                })
-            ));
-        }
+        let mut data = VERSION.to_le_bytes().to_vec();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidHash {
+                section: "network",
+                ..
+            })
+        ));
+        data[4..8].copy_from_slice(&(FEATURE_TRANSFORMER_HASH ^ ARCHITECTURE_HASH).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // empty description
+        data.extend_from_slice(&0u32.to_le_bytes()); // invalid feature hash
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidHash {
+                section: "feature transformer",
+                ..
+            })
+        ));
+        assert!(matches!(
+            read_layer_stack(&0u32.to_le_bytes(), &mut 0),
+            Err(NnueError::InvalidHash {
+                section: "layer stack",
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn test_model_layer_layouts_are_distinct() {
-        for format in [ModelFormat::Current, ModelFormat::Legacy] {
-            let mut data = ARCHITECTURE_HASH.to_le_bytes().to_vec();
-            let parameters = FC0_OUTPUTS * 4
-                + FC0_OUTPUTS * TRANSFORMED_DIMS
-                + L3_BIG * 4
-                + L3_BIG * FC1_INPUTS_PADDED
-                + 4
-                + format.fc2_inputs();
-            data.resize(data.len() + parameters, 0);
-            let mut pos = 0;
-            let layer = read_layer_stack(&data, &mut pos, format).expect("valid layer");
-            assert_eq!(pos, data.len());
-            assert_eq!(layer.fc2_weights.len(), format.fc2_inputs());
-            assert!(read_layer_stack(&data[..data.len() - 1], &mut 0, format).is_err());
-        }
+    fn test_model_rejects_historical_version_before_reading_parameters() {
+        // The former pin used this version and network hash. Like current
+        // Pikafish, reject its header before interpreting any weight bytes.
+        let mut data = 0x7AF3_2F20u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&0x0256_ACDFu32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // empty description
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidVersion { got: 0x7AF3_2F20 })
+        ));
+    }
+
+    #[test]
+    fn test_model_layer_layout_and_truncation() {
+        let mut data = ARCHITECTURE_HASH.to_le_bytes().to_vec();
+        let parameters = FC0_OUTPUTS * 4
+            + FC0_OUTPUTS * TRANSFORMED_DIMS
+            + L3_BIG * 4
+            + L3_BIG * FC1_INPUTS_PADDED
+            + 4
+            + FC2_INPUTS;
+        data.resize(data.len() + parameters, 0);
+        let mut pos = 0;
+        let layer = read_layer_stack(&data, &mut pos).expect("valid layer");
+        assert_eq!(pos, data.len());
+        assert_eq!(layer.fc2_weights.len(), FC2_INPUTS);
+        assert!(read_layer_stack(&data[..data.len() - 1], &mut 0).is_err());
     }
 
     #[test]

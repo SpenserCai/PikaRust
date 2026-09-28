@@ -115,9 +115,7 @@ jobs:
           python-version: '3.12'
       - run: rustup show
       - name: Verify actual NNUE weights
-        run: |
-          bash scripts/setup-pikafish.sh --verify-model
-          bash scripts/setup-pikafish.sh --legacy --verify-model
+        run: bash scripts/setup-pikafish.sh --verify-model
       - run: cargo test --locked --workspace --all-targets --features pikarust-app/server
       - run: cargo test --locked --workspace --doc
       - name: Scalar implementation

@@ -50,31 +50,18 @@ reference tooling. This is distinct from the native CLI's
 `PIKARUST_NNUE_FILE` runtime option. Changing the location does not relax digest
 validation.
 
-### Previous-model compatibility
+### Model compatibility
 
-The previous weights remain tracked by Git LFS at
-`models/pikafish-legacy-92b5fb5d.nnue`, with their original digest and official
-revision in [`scripts/reference-legacy.lock`](../scripts/reference-legacy.lock).
-Verify both retained inputs before running model compatibility tests:
+The engine supports the current upstream NNUE format and rejects historical
+versions. The loader validates structural hashes, compressed data, and the end
+of the parameter stream; a malformed model must not silently fall back to another
+format. Unit tests explicitly reject the previous format header without needing
+to distribute its weights.
 
-```sh
-git lfs pull --include="models/*.nnue"
-scripts/setup-pikafish.sh --verify-model
-scripts/setup-pikafish.sh --legacy --verify-model
-```
-
-`scripts/setup-pikafish.sh --legacy build` builds the historical official engine
-with the previous weights under `tests/fixtures/pikafish/legacy`; `--legacy
---source-only` only prepares its revision-specific source directory. The existing
-`PIKAFISH_SOURCE_DIR`, `PIKAFISH_OUTPUT_DIR`, and `PIKARUST_NNUE_MODEL` overrides
-still apply to an explicit legacy invocation. A model override must match the
-selected lock's digest.
-
-Normal `run-e2e.sh` and `run-bench.sh` commands always enforce the current pin.
-An old reference or model supplied to them fails verification; legacy loading
-compatibility is separate from current search parity. The retained weights have
-no automatic deletion date. A future removal requires a separate reviewed
-migration decision, including updates to compatibility tests and documentation.
+`run-e2e.sh` and `run-bench.sh` enforce the exact current model and source pins.
+An old reference or a different model supplied to them fails verification.
+To reproduce an earlier release, use that release's source revision and its
+matching model rather than mixing historical inputs into current comparisons.
 
 ## Test layers
 

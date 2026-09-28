@@ -229,8 +229,7 @@ class ArtifactTests(unittest.TestCase):
                  "rust-toolchain.toml": '[toolchain]\nchannel="1.85.0"\n', "README.md": "readme", "CONTRIBUTING.md": "development guide",
                  "docs/releases.md": "release guide", "models/LICENSE-NNUE": "model terms", "models/README.md": "model setup",
                  "models/pikafish.nnue": "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a" * 64 + "\nsize 100000000\n",
-                 "scripts/reference.lock": "reference pins",
-                 "scripts/reference-legacy.lock": "legacy reference pins"}
+                 "scripts/reference.lock": "reference pins"}
         for name in release.LICENSE_FILES:
             files[name] = (release.ROOT / name).read_text(encoding="utf-8")
         package = {"name": "pikarust-web", "version": "0.1.0", "license": "MIT"}
@@ -414,17 +413,14 @@ class ArtifactTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "matching GPL corresponding source"):
                 release.validate_archive(archive, "0.1.0", self.sha, target)
 
-    def test_native_archives_retain_both_model_reference_pins(self):
+    def test_native_archives_require_current_model_reference_pin(self):
         for target in (release.TARGETS[0], release.TARGETS[2]):
             release.package(target, self.output)
             archive = self.output / release.archive_name("0.1.0", target)
-            original = archive.read_bytes()
-            for name in ("scripts/reference.lock", "scripts/reference-legacy.lock"):
-                with self.subTest(target=target, missing=name):
-                    archive.write_bytes(original)
-                    self.changed_archive(archive, remove=name)
-                    with self.assertRaisesRegex(ValueError, "missing or empty"):
-                        release.validate_archive(archive, "0.1.0", self.sha, target)
+            with self.subTest(target=target):
+                self.changed_archive(archive, remove="scripts/reference.lock")
+                with self.assertRaisesRegex(ValueError, "missing or empty"):
+                    release.validate_archive(archive, "0.1.0", self.sha, target)
 
     def test_dependency_missing_license_requires_explicit_versioned_supplement(self):
         vendor = self.root / "target/vendor"

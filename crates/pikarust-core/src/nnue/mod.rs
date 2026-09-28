@@ -11,7 +11,7 @@ pub mod simd;
 pub use accumulator::{
     Accumulator, AccumulatorStack, DiffType, DirtyPiece, DirtyThreat, DirtyThreats,
 };
-pub use model::{L2_BIG, ModelFormat, NnueError, NnueModel, WEIGHT_SCALE_BITS};
+pub use model::{L2_BIG, NnueError, NnueModel, WEIGHT_SCALE_BITS};
 pub use network::{Network, make_layer_stack_bucket};
 
 #[cfg(test)]
