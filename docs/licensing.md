@@ -17,7 +17,7 @@ The NNUE model has separate terms.
 | `crates/uci-rs` | `MIT` | Independent UCI parser and response types |
 | `pikarust-web/bridge` | `MIT` | Independent adapter to an engine subprocess |
 | `pikarust-web/frontend` | `MIT` | Independent browser interface |
-| `models/pikafish.nnue` | [NNUE-License](../models/LICENSE-NNUE) | Model weights, not the Rust NNUE implementation |
+| `models/pikafish.nnue` | [NNUE-License](../models/LICENSE-NNUE) | Pinned network weights, not the Rust NNUE implementation |
 
 The root GPL license is the repository default outside explicit exceptions.
 Third-party dependencies and retained upstream notices keep their own terms.

@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// 2026-09-28: current Pikafish architecture with strict model validation.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::io::Read;
@@ -9,13 +10,13 @@ use std::path::Path;
 
 use thiserror::Error;
 
-pub const VERSION: u32 = 0x7AF3_2F20;
+pub const VERSION: u32 = 0x6A44_8AFA;
 pub const TRANSFORMED_DIMS: usize = 1024;
 pub const PSQ_DIMS: usize = 16_536;
 pub const THREAT_DIMS: usize = 45_547;
 pub const PSQT_BUCKETS: usize = 16;
 pub const LAYER_STACKS: usize = 16;
-pub const L2_BIG: usize = 31;
+pub const L2_BIG: usize = 32;
 pub const L3_BIG: usize = 32;
 pub const WEIGHT_SCALE_BITS: u32 = 6;
 pub const OUTPUT_SCALE: i32 = 16;
@@ -26,9 +27,15 @@ pub const ATTACK_BUCKET_NB: usize = 4;
 #[allow(dead_code)]
 pub const KING_BUCKET_NB: usize = 6;
 
-const FC0_OUTPUTS: usize = L2_BIG + 1; // 32
+const FC0_OUTPUTS: usize = L2_BIG;
 const FC1_INPUTS_PADDED: usize = 64;
-const FC2_INPUTS: usize = 32;
+const FC2_INPUTS: usize = L2_BIG * 2 + L3_BIG * 2;
+// Upstream NetworkArchitecture::get_hash_value(). The version and feature
+// transformer hash are checked separately, as in the official loader.
+const ARCHITECTURE_HASH: u32 = 0x6333_7116;
+const FEATURE_TRANSFORMER_HASH: u32 = super::features::full_threats::HASH_VALUE.rotate_left(1)
+    ^ super::features::half_ka_v2_hm::HASH_VALUE
+    ^ (TRANSFORMED_DIMS as u32 * 2);
 
 const LEB128_MAGIC: &[u8; 17] = b"COMPRESSED_LEB128";
 
@@ -36,8 +43,14 @@ const LEB128_MAGIC: &[u8; 17] = b"COMPRESSED_LEB128";
 pub enum NnueError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("invalid NNUE version: expected 0x{:08X}, got 0x{got:08X}", VERSION)]
+    #[error("unsupported NNUE version 0x{got:08X}; expected 0x{:08X}", VERSION)]
     InvalidVersion { got: u32 },
+    #[error("invalid {section} NNUE hash: expected 0x{expected:08X}, got 0x{got:08X}")]
+    InvalidHash {
+        section: &'static str,
+        expected: u32,
+        got: u32,
+    },
     #[error("zstd decompression failed: {0}")]
     Zstd(std::io::Error),
     #[error("unexpected end of data at offset {offset}")]
@@ -46,6 +59,10 @@ pub enum NnueError {
     InvalidLeb128Magic { offset: usize },
     #[error("LEB128 decode produced {decoded} values, expected {expected}")]
     Leb128CountMismatch { decoded: usize, expected: usize },
+    #[error("invalid signed LEB128 integer for {bits} bits")]
+    InvalidLeb128 { bits: u32 },
+    #[error("unexpected trailing data at offset {offset}")]
+    TrailingData { offset: usize },
 }
 
 pub struct FeatureTransformerWeights {
@@ -72,19 +89,32 @@ pub struct NnueModel {
 }
 
 impl NnueModel {
+    /// Load a model for the current architecture, validating all structural hashes.
+    ///
+    /// Unknown versions, incompatible architectures, malformed parameter blocks,
+    /// and trailing data return an error. Historical formats are unsupported,
+    /// matching the pinned official engine's loader.
     pub fn load(path: &Path) -> Result<Self, NnueError> {
         let compressed = std::fs::read(path)?;
         let decompressed =
             zstd::stream::decode_all(std::io::Cursor::new(&compressed)).map_err(NnueError::Zstd)?;
 
-        let data = &decompressed;
+        Self::decode(&decompressed)
+    }
+
+    fn decode(data: &[u8]) -> Result<Self, NnueError> {
         let mut pos = 0;
 
         let version = read_u32(data, &mut pos)?;
         if version != VERSION {
             return Err(NnueError::InvalidVersion { got: version });
         }
-        let _hash = read_u32(data, &mut pos)?;
+        read_hash(
+            data,
+            &mut pos,
+            FEATURE_TRANSFORMER_HASH ^ ARCHITECTURE_HASH,
+            "network",
+        )?;
         let desc_size = read_u32(data, &mut pos)? as usize;
         let description = read_string(data, &mut pos, desc_size)?;
 
@@ -92,6 +122,9 @@ impl NnueModel {
         let mut layer_stacks = Vec::with_capacity(LAYER_STACKS);
         for _ in 0..LAYER_STACKS {
             layer_stacks.push(read_layer_stack(data, &mut pos)?);
+        }
+        if pos != data.len() {
+            return Err(NnueError::TrailingData { offset: pos });
         }
 
         Ok(Self {
@@ -117,7 +150,7 @@ fn read_feature_transformer(
     data: &[u8],
     pos: &mut usize,
 ) -> Result<FeatureTransformerWeights, NnueError> {
-    let _ft_hash = read_u32(data, pos)?;
+    read_hash(data, pos, FEATURE_TRANSFORMER_HASH, "feature transformer")?;
 
     let mut biases = Box::new([0i16; TRANSFORMED_DIMS]);
     let consumed = read_leb128_i16(data, *pos, biases.as_mut_slice())?;
@@ -127,18 +160,16 @@ fn read_feature_transformer(
     let mut threat_weights = vec![0i8; threat_weight_count].into_boxed_slice();
     read_i8_slice(data, pos, &mut threat_weights)?;
 
+    let threat_psqt_count = THREAT_DIMS * PSQT_BUCKETS;
+    let mut threat_psqt_weights = vec![0i32; threat_psqt_count].into_boxed_slice();
+    *pos += read_leb128_i32(data, *pos, &mut threat_psqt_weights)?;
+
     let psq_weight_count = PSQ_DIMS * TRANSFORMED_DIMS;
     let mut weights = vec![0i8; psq_weight_count].into_boxed_slice();
     read_i8_slice(data, pos, &mut weights)?;
 
-    let total_psqt = (THREAT_DIMS + PSQ_DIMS) * PSQT_BUCKETS;
-    let mut all_psqt = vec![0i32; total_psqt];
-    let consumed = read_leb128_i32(data, *pos, &mut all_psqt)?;
-    *pos += consumed;
-
-    let threat_psqt_count = THREAT_DIMS * PSQT_BUCKETS;
-    let threat_psqt_weights = all_psqt[..threat_psqt_count].to_vec().into_boxed_slice();
-    let psqt_weights = all_psqt[threat_psqt_count..].to_vec().into_boxed_slice();
+    let mut psqt_weights = vec![0i32; PSQ_DIMS * PSQT_BUCKETS].into_boxed_slice();
+    *pos += read_leb128_i32(data, *pos, &mut psqt_weights)?;
 
     Ok(FeatureTransformerWeights {
         biases,
@@ -150,7 +181,7 @@ fn read_feature_transformer(
 }
 
 fn read_layer_stack(data: &[u8], pos: &mut usize) -> Result<LayerStackWeights, NnueError> {
-    let _arch_hash = read_u32(data, pos)?;
+    read_hash(data, pos, ARCHITECTURE_HASH, "layer stack")?;
 
     // fc_0: biases[32] as i32, weights[32*1024] as i8 (file: output-major)
     let mut fc0_biases = Box::new([0i32; FC0_OUTPUTS]);
@@ -168,11 +199,10 @@ fn read_layer_stack(data: &[u8], pos: &mut usize) -> Result<LayerStackWeights, N
     read_i8_slice(data, pos, &mut fc1_weights_raw)?;
     let fc1_weights = transpose_weights(&fc1_weights_raw, L3_BIG, FC1_INPUTS_PADDED);
 
-    // fc_2: biases[1] as i32, weights[1*32] as i8
+    // fc_2: one output, 128 concatenated hidden activations.
     let mut fc2_biases = Box::new([0i32; 1]);
     read_i32_slice(data, pos, fc2_biases.as_mut_slice())?;
-    let fc2_weight_count = FC2_INPUTS;
-    let mut fc2_weights = vec![0i8; fc2_weight_count].into_boxed_slice();
+    let mut fc2_weights = vec![0i8; FC2_INPUTS].into_boxed_slice();
     read_i8_slice(data, pos, &mut fc2_weights)?;
 
     Ok(LayerStackWeights {
@@ -186,8 +216,25 @@ fn read_layer_stack(data: &[u8], pos: &mut usize) -> Result<LayerStackWeights, N
 }
 
 const fn ensure_remaining(data: &[u8], pos: usize, need: usize) -> Result<(), NnueError> {
-    if pos + need > data.len() {
+    if pos > data.len() || need > data.len() - pos {
         return Err(NnueError::UnexpectedEof { offset: pos });
+    }
+    Ok(())
+}
+
+fn read_hash(
+    data: &[u8],
+    pos: &mut usize,
+    expected: u32,
+    section: &'static str,
+) -> Result<(), NnueError> {
+    let got = read_u32(data, pos)?;
+    if got != expected {
+        return Err(NnueError::InvalidHash {
+            section,
+            expected,
+            got,
+        });
     }
     Ok(())
 }
@@ -260,6 +307,11 @@ pub fn read_leb128_i16(data: &[u8], start: usize, output: &mut [i16]) -> Result<
             expected: output.len(),
         });
     }
+    if cursor.position() as usize != leb_data.len() {
+        return Err(NnueError::TrailingData {
+            offset: start + LEB128_MAGIC.len() + 4 + cursor.position() as usize,
+        });
+    }
 
     Ok(pos - start)
 }
@@ -296,51 +348,149 @@ pub fn read_leb128_i32(data: &[u8], start: usize, output: &mut [i32]) -> Result<
             expected: output.len(),
         });
     }
+    if cursor.position() as usize != leb_data.len() {
+        return Err(NnueError::TrailingData {
+            offset: start + LEB128_MAGIC.len() + 4 + cursor.position() as usize,
+        });
+    }
 
     Ok(pos - start)
 }
 
 fn decode_signed_leb128_i16(reader: &mut impl Read) -> Result<i16, NnueError> {
-    let mut result: i16 = 0;
-    let mut shift: u32 = 0;
-    let mut byte_buf = [0u8; 1];
-    loop {
-        reader.read_exact(&mut byte_buf)?;
-        let byte = byte_buf[0];
-        result |= (i16::from(byte & 0x7f)) << shift;
-        shift += 7;
-        if byte & 0x80 == 0 {
-            if shift < 16 && (byte & 0x40) != 0 {
-                result |= !0i16 << shift;
-            }
-            break;
-        }
-    }
-    Ok(result)
+    i16::try_from(decode_signed_leb128(reader, 16)?)
+        .map_err(|_| NnueError::InvalidLeb128 { bits: 16 })
 }
 
 fn decode_signed_leb128_i32(reader: &mut impl Read) -> Result<i32, NnueError> {
-    let mut result: i32 = 0;
+    i32::try_from(decode_signed_leb128(reader, 32)?)
+        .map_err(|_| NnueError::InvalidLeb128 { bits: 32 })
+}
+
+fn decode_signed_leb128(reader: &mut impl Read, bits: u32) -> Result<i64, NnueError> {
+    let mut result = 0i64;
     let mut shift: u32 = 0;
     let mut byte_buf = [0u8; 1];
-    loop {
+    while shift < bits {
         reader.read_exact(&mut byte_buf)?;
         let byte = byte_buf[0];
-        result |= (i32::from(byte & 0x7f)) << shift;
+        result |= i64::from(byte & 0x7f) << shift;
         shift += 7;
         if byte & 0x80 == 0 {
-            if shift < 32 && (byte & 0x40) != 0 {
-                result |= !0i32 << shift;
+            if byte & 0x40 != 0 {
+                result |= !0i64 << shift;
             }
-            break;
+            return Ok(result);
         }
     }
-    Ok(result)
+    Err(NnueError::InvalidLeb128 { bits })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_model_rejects_unknown_version_and_mismatched_hashes() {
+        assert!(matches!(
+            NnueModel::decode(&0u32.to_le_bytes()),
+            Err(NnueError::InvalidVersion { got: 0 })
+        ));
+        let mut data = VERSION.to_le_bytes().to_vec();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidHash {
+                section: "network",
+                ..
+            })
+        ));
+        data[4..8].copy_from_slice(&(FEATURE_TRANSFORMER_HASH ^ ARCHITECTURE_HASH).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // empty description
+        data.extend_from_slice(&0u32.to_le_bytes()); // invalid feature hash
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidHash {
+                section: "feature transformer",
+                ..
+            })
+        ));
+        assert!(matches!(
+            read_layer_stack(&0u32.to_le_bytes(), &mut 0),
+            Err(NnueError::InvalidHash {
+                section: "layer stack",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_model_rejects_historical_version_before_reading_parameters() {
+        // The former pin used this version and network hash. Like current
+        // Pikafish, reject its header before interpreting any weight bytes.
+        let mut data = 0x7AF3_2F20u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&0x0256_ACDFu32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes()); // empty description
+        assert!(matches!(
+            NnueModel::decode(&data),
+            Err(NnueError::InvalidVersion { got: 0x7AF3_2F20 })
+        ));
+    }
+
+    #[test]
+    fn test_model_layer_layout_and_truncation() {
+        let mut data = ARCHITECTURE_HASH.to_le_bytes().to_vec();
+        let parameters = FC0_OUTPUTS * 4
+            + FC0_OUTPUTS * TRANSFORMED_DIMS
+            + L3_BIG * 4
+            + L3_BIG * FC1_INPUTS_PADDED
+            + 4
+            + FC2_INPUTS;
+        data.resize(data.len() + parameters, 0);
+        let mut pos = 0;
+        let layer = read_layer_stack(&data, &mut pos).expect("valid layer");
+        assert_eq!(pos, data.len());
+        assert_eq!(layer.fc2_weights.len(), FC2_INPUTS);
+        assert!(read_layer_stack(&data[..data.len() - 1], &mut 0).is_err());
+    }
+
+    #[test]
+    fn test_leb128_rejects_overlong_and_out_of_range_values() {
+        for bytes in [&[0x80u8, 0x80, 0x80][..], &[0xff, 0xff, 0x03][..]] {
+            assert!(matches!(
+                decode_signed_leb128_i16(&mut std::io::Cursor::new(bytes)),
+                Err(NnueError::InvalidLeb128 { bits: 16 })
+            ));
+        }
+        for bytes in [
+            &[0x80u8, 0x80, 0x80, 0x80, 0x80][..],
+            &[0xff, 0xff, 0xff, 0xff, 0x0f][..],
+        ] {
+            assert!(matches!(
+                decode_signed_leb128_i32(&mut std::io::Cursor::new(bytes)),
+                Err(NnueError::InvalidLeb128 { bits: 32 })
+            ));
+        }
+    }
+
+    #[test]
+    fn test_leb128_rejects_unconsumed_block_bytes() {
+        let mut block = LEB128_MAGIC.to_vec();
+        block.extend_from_slice(&2u32.to_le_bytes());
+        block.extend_from_slice(&[0, 0]);
+        assert!(matches!(
+            read_leb128_i16(&block, 0, &mut [0]),
+            Err(NnueError::TrailingData { .. })
+        ));
+        assert!(matches!(
+            read_leb128_i32(&block, 0, &mut [0]),
+            Err(NnueError::TrailingData { .. })
+        ));
+        assert!(matches!(
+            ensure_remaining(&[], usize::MAX, 1),
+            Err(NnueError::UnexpectedEof { .. })
+        ));
+    }
 
     #[test]
     fn test_leb128_i16_roundtrip() {

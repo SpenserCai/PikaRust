@@ -2,9 +2,11 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use crate::types::{Color, Move, Piece, PieceType, Square};
+use std::sync::atomic::{AtomicI16, Ordering};
 
 const BUTTERFLY_HISTORY_LIMIT: i16 = 7183;
 const CAPTURE_HISTORY_LIMIT: i16 = 10692;
@@ -215,41 +217,42 @@ impl Default for CapturePieceToHistory {
 // ---------------------------------------------------------------------------
 
 pub struct PieceToHistory {
-    pub table: [[i16; Square::NUM]; Piece::NUM],
+    pub table: [[AtomicI16; Square::NUM]; Piece::NUM],
 }
 
 impl PieceToHistory {
     pub const fn new() -> Self {
         Self {
-            table: [[0i16; Square::NUM]; Piece::NUM],
+            table: [const { [const { AtomicI16::new(0) }; Square::NUM] }; Piece::NUM],
         }
     }
 
-    pub fn fill(&mut self, val: i16) {
-        for pc_table in &mut self.table {
-            pc_table.fill(val);
+    pub fn fill(&self, val: i16) {
+        for pc_table in &self.table {
+            for entry in pc_table {
+                entry.store(val, Ordering::Relaxed);
+            }
         }
     }
 
     #[inline]
-    pub const fn get(&self, pc: Piece, sq: Square) -> i16 {
-        self.table[pc.index()][sq.index()]
+    pub fn get(&self, pc: Piece, sq: Square) -> i16 {
+        self.table[pc.index()][sq.index()].load(Ordering::Relaxed)
     }
 
     #[inline]
-    pub fn update(&mut self, pc: Piece, sq: Square, bonus: i32) {
-        update_entry(
-            &mut self.table[pc.index()][sq.index()],
-            bonus,
-            CONTINUATION_HISTORY_LIMIT,
-        );
+    pub fn update(&self, pc: Piece, sq: Square, bonus: i32) {
+        let entry = &self.table[pc.index()][sq.index()];
+        let mut value = entry.load(Ordering::Relaxed);
+        update_entry(&mut value, bonus, CONTINUATION_HISTORY_LIMIT);
+        entry.store(value, Ordering::Relaxed);
     }
 
     /// Mutable reference to a specific entry, for use by `update_continuation_histories`
     /// which needs to read-then-write with a custom multiplier.
     #[inline]
-    pub const fn entry_mut(&mut self, pc: Piece, sq: Square) -> &mut i16 {
-        &mut self.table[pc.index()][sq.index()]
+    pub fn entry_mut(&mut self, pc: Piece, sq: Square) -> &mut i16 {
+        self.table[pc.index()][sq.index()].get_mut()
     }
 }
 
@@ -299,11 +302,11 @@ impl ContinuationHistory {
         }
     }
 
-    pub fn fill(&mut self, val: i16) {
-        for in_check in &mut self.table {
+    pub fn fill(&self, val: i16) {
+        for in_check in &self.table {
             for capture in in_check {
-                for pc_table in capture.iter_mut() {
-                    for sq_table in pc_table.iter_mut() {
+                for pc_table in capture.iter() {
+                    for sq_table in pc_table {
                         sq_table.fill(val);
                     }
                 }
@@ -491,9 +494,17 @@ impl UnifiedCorrectionHistory {
     }
 
     pub fn clear(&mut self) {
+        self.fill(0);
+    }
+
+    pub fn fill(&mut self, value: i16) {
         for entry in &mut self.table {
-            entry[0].clear();
-            entry[1].clear();
+            for bundle in entry {
+                bundle.pawn = value;
+                bundle.minor = value;
+                bundle.non_pawn_white = value;
+                bundle.non_pawn_black = value;
+            }
         }
     }
 

@@ -19,11 +19,12 @@ git clone https://github.com/SpenserCai/PikaRust.git
 cd PikaRust
 git lfs install
 git lfs pull --include="models/pikafish.nnue"
+scripts/setup-pikafish.sh --verify-model
 cargo build --workspace --locked
 ```
 
-Run `scripts/setup-pikafish.sh --verify-model` before model-backed validation. A small text pointer
-at `models/pikafish.nnue` is not the model. A missing or different network must not
+Verify the pinned model before model-backed validation. A small text pointer at
+`models/pikafish.nnue` is not the model. A missing or different network must not
 be worked around by weakening tests.
 
 ## Making a change

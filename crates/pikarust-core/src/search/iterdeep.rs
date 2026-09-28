@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::sync::atomic::Ordering;
@@ -15,7 +16,7 @@ use crate::types::{
 
 use super::movepick::MovePicker;
 use super::search::{
-    LMR_DIVISOR, SEARCHED_LIST_CAPACITY, Worker, to_corrected_static_eval, value_from_tt,
+    SEARCHED_LIST_CAPACITY, Worker, lmr_divisor, to_corrected_static_eval, value_from_tt,
     value_to_tt,
 };
 
@@ -28,8 +29,11 @@ impl Worker {
         let mut best_value;
         let mut iter_idx: usize = 0;
         let mut search_again_counter = 0;
+        let mut fail_high_recovery = 0;
         let mut time_reduction = 1.0_f64;
         let mut last_best_move_depth: Depth = 0;
+        let mut last_best_move_pv = Vec::new();
+        let mut last_best_move_score = -VALUE_INFINITE;
 
         self.reset_ss();
         self.reset_acc();
@@ -51,7 +55,7 @@ impl Worker {
         }
 
         self.low_ply_history.fill(99);
-        self.main_history.scale(768, 1024);
+        self.main_history.scale(747, 1024);
 
         while self.root_depth + 1 < MAX_PLY
             && !self.stop.load(Ordering::Relaxed)
@@ -68,7 +72,10 @@ impl Worker {
 
             for rm in &mut self.root_moves {
                 rm.previous_score = rm.score;
+                rm.previous_pv.clone_from(&rm.pv);
             }
+            self.last_iteration_pv
+                .clone_from(&self.root_moves[self.pv_idx].previous_pv);
 
             if !self.increase_depth.load(Ordering::Relaxed) {
                 search_again_counter += 1;
@@ -79,18 +86,23 @@ impl Worker {
 
             let mut delta = 10
                 + (self.thread_idx % 8) as i32
-                + (self.root_moves[0].mean_squared_score.unsigned_abs() / 39605) as i32;
+                + (self.root_moves[0].mean_squared_score.unsigned_abs() / 39201) as i32;
             let avg = self.root_moves[0].average_score;
             let mut alpha = (avg - delta).max(-VALUE_INFINITE);
             let mut beta = (avg + delta).min(VALUE_INFINITE);
 
-            self.optimism[us.index()] = 92 * avg / (avg.abs() + 95);
+            self.optimism[us.index()] = 92 * avg / (avg.abs() + 96);
             self.optimism[(!us).index()] = -self.optimism[us.index()];
 
             let mut failed_high_cnt = 0;
+            fail_high_recovery = (fail_high_recovery - 2).max(0);
             loop {
-                let adjusted_depth =
-                    1.max(self.root_depth - failed_high_cnt - 3 * (search_again_counter + 1) / 4);
+                let adjusted_depth = 1.max(
+                    self.root_depth
+                        - failed_high_cnt
+                        - fail_high_recovery
+                        - 3 * (search_again_counter + 1) / 4,
+                );
                 self.root_delta = beta - alpha;
                 best_value = self.ab_search::<true>(0, alpha, beta, adjusted_depth, false);
 
@@ -119,25 +131,35 @@ impl Worker {
                     break;
                 }
 
-                delta += delta / 3;
+                delta += 44 * delta / 128;
             }
 
+            if failed_high_cnt > 0 {
+                fail_high_recovery = (failed_high_cnt + 1) / 2 + 2;
+            }
+            let forgotten_mate = last_best_move_score != -VALUE_INFINITE
+                && is_decisive(last_best_move_score)
+                && (self.root_moves[0].score.abs() < last_best_move_score.abs()
+                    || self.root_moves[0].is_inexact());
             if !self.stop.load(Ordering::Relaxed) {
                 self.completed_depth = self.root_depth;
 
-                if self.last_iteration_pv.is_empty()
-                    || self.root_moves[0].pv[0] != self.last_iteration_pv[0]
+                if last_best_move_pv.is_empty() || self.root_moves[0].pv[0] != last_best_move_pv[0]
                 {
                     last_best_move_depth = self.root_depth;
                 }
 
-                self.last_iteration_pv = self.root_moves[0].pv.clone();
-            } else if self.pv_idx == 0
-                && self.root_moves[0].score != -VALUE_INFINITE
-                && is_loss(self.root_moves[0].score)
-            {
-                if !self.last_iteration_pv.is_empty() {
-                    let last_pv_move = self.last_iteration_pv[0];
+                if !forgotten_mate {
+                    last_best_move_pv.clone_from(&self.root_moves[0].pv);
+                    last_best_move_score = self.root_moves[0].score;
+                }
+            }
+            let aborted_loss = self.stop.load(Ordering::Relaxed)
+                && self.pv_idx == 0
+                && self.root_moves[0].is_exact_loss();
+            if aborted_loss || (self.root_moves[0].score != -VALUE_INFINITE && forgotten_mate) {
+                if !last_best_move_pv.is_empty() {
+                    let last_pv_move = last_best_move_pv[0];
                     if let Some(idx) = self
                         .root_moves
                         .iter()
@@ -145,11 +167,12 @@ impl Worker {
                     {
                         self.root_moves[..=idx].rotate_right(1);
                     }
-                    self.root_moves[0].pv.clone_from(&self.last_iteration_pv);
-                    self.root_moves[0].score = self.root_moves[0].previous_score;
-                    self.root_moves[0].uci_score = self.root_moves[0].previous_score;
-                } else if !self.root_moves[0].score_lowerbound {
-                    self.root_moves[0].score_upperbound = true;
+                    self.root_moves[0].pv.clone_from(&last_best_move_pv);
+                    self.root_moves[0].score = last_best_move_score;
+                    self.root_moves[0].uci_score = last_best_move_score;
+                    self.root_moves[0].unset_inexact();
+                } else if aborted_loss {
+                    self.root_moves[0].score_lowerbound = true;
                 }
             }
 
@@ -186,14 +209,14 @@ impl Worker {
                 let best_val = f64::from(best_value);
                 let iter_val = f64::from(self.iter_value[iter_idx]);
 
-                let falling_eval = (0.81f64.mul_add(
+                let falling_eval = (0.8f64.mul_add(
                     iter_val - best_val,
                     2.730f64.mul_add(best_prev_avg - best_val, 16.93),
                 ) / 100.0)
                     .clamp(0.610, 1.860);
 
                 // If the best move is stable over several iterations, reduce time
-                let depth_diff = f64::from(self.completed_depth - last_best_move_depth);
+                let depth_diff = f64::from(self.root_depth - last_best_move_depth);
                 time_reduction = interpolate(depth_diff, 8.0, 17.0, 0.67, 1.44).clamp(0.67, 1.44);
 
                 let reduction = (2.1 + self.previous_time_reduction) / (2.480 * time_reduction);
@@ -212,9 +235,15 @@ impl Worker {
                     * high_best_move_effort;
 
                 let elapsed = self.tm.elapsed() as f64;
+                if self.root_moves.len() == 1 {
+                    self.stop.store(true, Ordering::Relaxed);
+                }
 
                 // Stop the search if we have exceeded the totalTime or maximum
-                if elapsed > total_time.min(self.tm.maximum() as f64) {
+                if elapsed > total_time.min(self.tm.maximum() as f64)
+                    || self.root_moves[0].score >= mate_in(3)
+                    || self.root_moves[0].score == mated_in(2)
+                {
                     if self.ponder.load(Ordering::Relaxed) {
                         self.stop_on_ponderhit = true;
                     } else {
@@ -282,6 +311,7 @@ impl Worker {
         pv_node: bool,
     ) -> Value {
         let all_node = !pv_node && !cut_node;
+        let seek_mate = self.root_depth >= 16 && self.root_moves[self.pv_idx].score.abs() >= 2000;
         let ss = self.ss_idx(ply);
 
         // Quiescence owns a distinct stack lifecycle. In particular, do not
@@ -346,6 +376,7 @@ impl Worker {
 
         self.ss_stat_scores[ss] = 0;
         self.ss_cutoff_cnts[ss + 2] = 0;
+        self.ss_prior_nmp_fail_high[ss + 1] = 0;
         if pv_node {
             self.ss_pvs[ss + 1].clear();
         }
@@ -451,7 +482,7 @@ impl Worker {
         if prior_reduction >= 2
             && depth >= 2
             && ss >= 1
-            && self.ss_static_evals[ss] + self.ss_static_evals[ss - 1] > 193
+            && self.ss_static_evals[ss] + self.ss_static_evals[ss - 1] > 194
         {
             depth -= 1;
         }
@@ -485,13 +516,13 @@ impl Worker {
                 // TT cutoff history updates (before rule60 check)
                 if tt_data.tt_move.is_ok() && tt_data.value >= beta {
                     if !tt_capture {
-                        let tt_bonus = (108 * depth - 60).min(1433);
+                        let tt_bonus = 127 * depth;
                         self.update_quiet_histories(ply, tt_data.tt_move, tt_bonus);
                     }
                     if ss >= 1 && self.ss_move_counts[ss - 1] < 3 && !prior_capture {
                         if let Some(psq) = prev_sq {
                             let pc_on_prev = self.root_pos.piece_on(psq);
-                            self.update_continuation_histories(ply - 1, pc_on_prev, psq, -2218);
+                            self.update_continuation_histories(ply - 1, pc_on_prev, psq, -2222);
                         }
                     }
                 }
@@ -520,6 +551,15 @@ impl Worker {
                         return tt_data.value;
                     }
                 }
+            } else if tt_data.bound != Bound::Exact && !bound_ok && depth > 5 {
+                let opposite = if tt_data.value >= beta {
+                    Bound::Upper
+                } else {
+                    Bound::Lower
+                };
+                if tt_data.bound as u8 & opposite as u8 != 0 {
+                    tt_writer.penalize(&self.tt, 1);
+                }
             }
         }
 
@@ -531,8 +571,8 @@ impl Worker {
                 && !prior_capture
             {
                 let eval_diff = (-(self.ss_static_evals[ss - 1] + self.ss_static_evals[ss]))
-                    .clamp(-110, 187)
-                    + 34;
+                    .clamp(-109, 185)
+                    + 35;
                 let not_us = !self.root_pos.side_to_move();
                 let prev_move = self.ss_current_moves[ss - 1];
                 self.main_history.update(not_us, prev_move, eval_diff * 13);
@@ -553,37 +593,38 @@ impl Worker {
             }
 
             // Razoring
-            if !pv_node && eval < alpha - 1370 - 244 * depth * depth {
+            if all_node && eval < alpha - 511 * depth && !seek_mate {
                 return self.qsearch(ply, alpha, beta, false);
             }
 
             // Futility pruning
             if !self.ss_tt_pvs[ss]
-                && depth < 15
+                && depth < if seek_mate { 6 } else { 15 }
                 && eval >= beta
                 && (!tt_data.tt_move.is_ok() || tt_capture)
                 && !is_loss(beta)
                 && !is_win(eval)
             {
-                let fm = 129 - 33 * i32::from(!tt_hit);
+                let fm = (41 + depth * 4).min(127) - 33 * i32::from(!tt_hit);
                 let margin = fm * depth
-                    - (2512 * i32::from(improving) + 340 * i32::from(opponent_worsening)) * fm
+                    - (2500 * i32::from(improving) + 333 * i32::from(opponent_worsening)) * fm
                         / 1024
-                    + correction_val.abs() / 132_109;
+                    + correction_val.abs() / 133_448;
                 if eval - margin >= beta {
-                    return (2 * beta + eval) / 3;
+                    return (718 * beta + 306 * eval) / 1024;
                 }
             }
 
             // Null move search
             if cut_node
-                && self.ss_static_evals[ss] >= beta - 8 * depth - 50 * i32::from(improving) + 187
+                && self.ss_static_evals[ss] + 50 * self.ss_prior_nmp_fail_high[ss]
+                    >= beta - 8 * depth - 51 * i32::from(improving) + 188
                 && !excluded_move.is_ok()
                 && self.root_pos.major_material(us) > 0
                 && ply >= self.nmp_min_ply
-                && !is_loss(beta)
+                && beta >= -2000
             {
-                let r = 8 + depth / 3;
+                let r = 8 + depth / 3 + ((self.ss_static_evals[ss] - beta) / 282).max(0);
                 self.ss_current_moves[ss] = Move::NULL;
                 self.set_cont_hist_index_sentinel(ply);
                 self.root_pos.do_null_move();
@@ -595,12 +636,14 @@ impl Worker {
 
                 if null_value >= beta && !is_win(null_value) {
                     if self.nmp_min_ply > 0 || depth < 15 {
+                        self.ss_prior_nmp_fail_high[ss] += 1;
                         return null_value;
                     }
                     self.nmp_min_ply = ply + 3 * (depth - r) / 4;
                     let v = self.ab_search::<false>(ply, beta - 1, beta, depth - r, false);
                     self.nmp_min_ply = 0;
                     if v >= beta {
+                        self.ss_prior_nmp_fail_high[ss] += 1;
                         return null_value;
                     }
                 }
@@ -610,26 +653,21 @@ impl Worker {
             improving |= self.ss_static_evals[ss] >= beta;
 
             // IIR (Phase B: add followPV and priorReduction conditions)
-            if !self.ss_follow_pvs[ss]
-                && !all_node
-                && depth >= 6
-                && !tt_data.tt_move.is_ok()
-                && prior_reduction <= 3
-            {
+            if !self.ss_follow_pvs[ss] && !all_node && depth >= 6 && !tt_data.tt_move.is_ok() {
                 depth -= 1;
             }
 
             // Step 10. ProbCut
             // If we have a good enough capture and a reduced search returns a value
             // much above beta, we can (almost) safely prune the previous move.
-            let prob_cut_beta = beta + 251 - 66 * i32::from(improving);
+            let prob_cut_beta = beta + 252 - 66 * i32::from(improving);
             if depth >= 3
                 && !is_decisive(beta)
                 && !(is_valid(tt_data.value) && tt_data.value < prob_cut_beta)
             {
                 debug_assert!(prob_cut_beta < VALUE_INFINITE && prob_cut_beta > beta);
 
-                let prob_cut_depth = depth - 4;
+                let prob_cut_depth = depth - if improving { 5 } else { 3 };
                 let mut pc_mp = MovePicker::new_probcut(
                     &self.root_pos,
                     tt_data.tt_move,
@@ -761,7 +799,7 @@ impl Worker {
 
             // Increase reduction for ttPv nodes (before Step 13, affects lmrDepth)
             if self.ss_tt_pvs[ss] {
-                r += 931;
+                r += 923;
             }
 
             // === Step 13: Pruning at shallow depths ===
@@ -793,7 +831,7 @@ impl Worker {
                 );
                 let futility_value = self.ss_static_evals[ss]
                     + 322
-                    + 336 * lmr_depth
+                    + 331 * lmr_depth
                     + PIECE_VALUE[self.root_pos.piece_on(m.to_sq())]
                     + 229 * i32::from(capt_hist) / 1024;
                 if futility_value <= alpha {
@@ -812,7 +850,7 @@ impl Worker {
                     m.to_sq(),
                     self.root_pos.piece_on(m.to_sq()),
                 ));
-                let margin = (256 * depth + capt_hist * 34 / 1024).max(0);
+                let margin = 258 * depth + capt_hist * 34 / 1024;
                 if !self.root_pos.see_ge(m, -margin) {
                     continue;
                 }
@@ -835,22 +873,20 @@ impl Worker {
                             .entry(pawn_key)
                             .get(moved_piece, m.to_sq()),
                     );
-                if history < -2995 * depth {
+                if history < -3020 * depth {
                     continue;
                 }
 
                 // History-adjusted lmrDepth
-                let history = history + 73 * i32::from(self.main_history.get(us, m)) / 32;
-                let d_index = (depth as usize).min(16).saturating_sub(1);
-                let adjusted_lmr_depth = lmr_depth + history / LMR_DIVISOR[d_index];
+                let history = history + 74 * i32::from(self.main_history.get(us, m)) / 32;
+                let adjusted_lmr_depth = lmr_depth + history / lmr_divisor(depth);
 
                 // Quiet futility pruning (parent node)
                 if !in_check && adjusted_lmr_depth < 10 {
                     let futility_value = self.ss_static_evals[ss]
-                        + 47
-                        + 272 * i32::from(!best_move.is_ok())
-                        + 129 * adjusted_lmr_depth
-                        + 112 * i32::from(self.ss_static_evals[ss] > alpha);
+                        + 132 * adjusted_lmr_depth
+                        + 107 * i32::from(self.ss_static_evals[ss] > alpha)
+                        + 313;
                     if futility_value <= alpha {
                         if best_value <= futility_value
                             && !is_decisive(best_value)
@@ -879,9 +915,10 @@ impl Worker {
                 && (tt_data.bound as u8 & Bound::Lower as u8) != 0
                 && tt_data.depth >= depth - 3
                 && !self.is_shuffling(m, ss, ply)
+                && !seek_mate
             {
                 let sb = tt_data.value
-                    - (44 + 72 * i32::from(self.ss_tt_pvs[ss] && !pv_node)) * depth / 69;
+                    - (45 + 72 * i32::from(self.ss_tt_pvs[ss] && !pv_node)) * depth / 69;
                 let sd = new_depth / 2;
 
                 self.ss_excluded_moves[ss] = m;
@@ -890,17 +927,17 @@ impl Worker {
 
                 if value < sb {
                     // Phase D: Improved singular extension margin
-                    let corr_val_adj = correction_val.abs() / 265_845;
-                    let tt_mh_adj = 1085 * i32::from(self.tt_move_history.get()) / 133_615;
+                    let corr_val_adj = correction_val.abs() / 265_717;
+                    let tt_mh_adj = 1079 * i32::from(self.tt_move_history.get()) / 134_272;
                     let ply_gt_root = i32::from(ply > self.root_depth);
-                    let double_margin = -4 + 234 * i32::from(pv_node)
-                        - 172 * i32::from(!tt_capture)
+                    let double_margin = -3 + 230 * i32::from(pv_node)
+                        - 173 * i32::from(!tt_capture)
                         - corr_val_adj
                         - tt_mh_adj
-                        - ply_gt_root * 43;
-                    let triple_margin = 106 + 299 * i32::from(pv_node)
+                        - ply_gt_root * 42;
+                    let triple_margin = 106 + 300 * i32::from(pv_node)
                         - 263 * i32::from(!tt_capture)
-                        + 93 * i32::from(self.ss_tt_pvs[ss])
+                        + 94 * i32::from(self.ss_tt_pvs[ss])
                         - corr_val_adj
                         - ply_gt_root * 60;
                     extension = 1
@@ -908,14 +945,21 @@ impl Worker {
                         + i32::from(value < sb - triple_margin);
                     depth += 1;
                 } else if value >= beta && !is_decisive(value) {
-                    self.tt_move_history.update((-397 - 103 * depth).max(-4055));
+                    self.tt_move_history.update(-396 - 104 * depth);
+                    if !self.ss_in_check[ss] && value > self.ss_static_evals[ss] {
+                        let bonus = ((value - self.ss_static_evals[ss]) * sd * 176 / 1024).clamp(
+                            -super::history::CORRECTION_HISTORY_LIMIT / 4,
+                            super::history::CORRECTION_HISTORY_LIMIT / 4,
+                        );
+                        self.update_correction_history(ply, bonus);
+                    }
                     return value;
-                } else if tt_data.value >= beta {
+                } else if tt_data.value >= beta || cut_node {
                     extension = -3;
-                } else if cut_node {
-                    extension = -2;
                 }
             }
+
+            let node_count = if ROOT { self.node_count() } else { 0 };
 
             // Make move
             self.ss_current_moves[ss] = m;
@@ -925,68 +969,80 @@ impl Worker {
             self.inc_nodes();
 
             new_depth += extension;
-            let node_count = if ROOT { self.node_count() } else { 0 };
 
             let mut value;
 
             // Compute statScore (after do_move, captures need captured_piece())
             if capture {
-                self.ss_stat_scores[ss] = 953 * PIECE_VALUE[self.root_pos.captured_piece()] / 128
+                self.ss_stat_scores[ss] = 962 * PIECE_VALUE[self.root_pos.captured_piece()] / 128
                     + i32::from(self.capture_history.get(
                         moved_piece,
                         m.to_sq(),
                         self.root_pos.captured_piece().piece_type(),
                     ));
             } else {
-                self.ss_stat_scores[ss] = 2 * i32::from(self.main_history.get(us, m))
-                    + self.get_cont_hist_value(ply, moved_piece, m.to_sq());
+                let history = |offset: usize| {
+                    let idx = self.ss_cont_hist_indices[ss - offset];
+                    i32::from(
+                        self.continuation_history
+                            .get(idx.in_check, idx.capture, idx.pc, idx.sq)
+                            .get(moved_piece, m.to_sq()),
+                    )
+                };
+                self.ss_stat_scores[ss] = (2044 * i32::from(self.main_history.get(us, m))
+                    + 1142 * history(1)
+                    + 1020 * history(2))
+                    / 1024;
             }
 
             // All r adjustments (C++ applies these before the LMR/non-LMR branch)
 
             if self.ss_tt_pvs[ss] {
-                r -= 2363
-                    + i32::from(pv_node) * 963
-                    + i32::from(tt_data.value > alpha) * 1121
-                    + i32::from(tt_data.depth >= depth) * (1137 + i32::from(cut_node) * 922);
+                r -= 2357
+                    + i32::from(pv_node) * 959
+                    + i32::from(tt_data.value > alpha) * 1114
+                    + i32::from(tt_data.depth >= depth) * (1136 + i32::from(cut_node) * 920);
             }
-            r += 855;
+            r += 858;
             r -= move_count * 64;
-            r -= correction_val.abs() / 30558;
+            r -= correction_val.abs() / 30382;
 
             if cut_node {
-                r += 3251 + 1048 * i32::from(!tt_data.tt_move.is_ok());
+                r += 3226 + 1036 * i32::from(!tt_data.tt_move.is_ok());
             }
             if tt_capture {
-                r += 1571;
+                r += 1553;
             }
 
             if ss + 1 < self.ss_cutoff_cnts.len() && self.ss_cutoff_cnts[ss + 1] > 1 {
-                r += 256
-                    + 1024 * i32::from(self.ss_cutoff_cnts[ss + 1] > 2)
-                    + 1024 * i32::from(all_node);
+                r += 259
+                    + 1019 * i32::from(self.ss_cutoff_cnts[ss + 1] > 2)
+                    + 1014 * i32::from(all_node);
+            } else if m == tt_data.tt_move {
+                r -= 2711;
             }
 
-            if m == tt_data.tt_move {
-                r -= 2953;
+            r -= self.ss_stat_scores[ss] * 956 / 8192;
+            if !capture && !is_decisive(alpha) {
+                r += 3 * (alpha - eval).clamp(-65, 92);
             }
-
-            r -= self.ss_stat_scores[ss] * 946 / 8192;
 
             if all_node {
-                r += r * 256 / (256 * depth + 256);
+                r += r * 254 / (256 * depth + 255);
             }
 
             // LMR
             if depth >= 2 && move_count > 1 {
-                let d = 1.max((new_depth - r / 1024).min(new_depth + 2)) + i32::from(pv_node);
+                let d = 1.max(
+                    new_depth + (-r / 1024).min(if ply < 2 * self.root_depth { 2 } else { 0 }),
+                ) + i32::from(pv_node);
 
                 self.ss_reductions[ss] = new_depth - d;
                 value = -self.ab_search::<false>(ply + 1, -(alpha + 1), -alpha, d, true);
                 self.ss_reductions[ss] = 0;
 
                 if value > alpha {
-                    let do_deeper = d < new_depth && value > best_value + 60;
+                    let do_deeper = d < new_depth && value > best_value + 59;
                     let do_shallower = value < best_value + 9;
                     new_depth += i32::from(do_deeper) - i32::from(do_shallower);
 
@@ -1001,18 +1057,18 @@ impl Worker {
                     }
 
                     // Post-LMR continuation history update (after deeper re-search)
-                    self.update_continuation_histories(ply, moved_piece, m.to_sq(), 1528);
+                    self.update_continuation_histories(ply, moved_piece, m.to_sq(), 1525);
                 }
             } else if !pv_node || move_count > 1 {
                 // Full-depth search when LMR is skipped (uses fully adjusted r)
-                let r_extra = if tt_data.tt_move.is_ok() { 0 } else { 979 };
+                let r_extra = if tt_data.tt_move.is_ok() { 0 } else { 980 };
                 value = -self.ab_search::<false>(
                     ply + 1,
                     -(alpha + 1),
                     -alpha,
                     new_depth
-                        - i32::from(r + r_extra > 3135)
-                        - i32::from(r + r_extra > 4840 && new_depth > 2),
+                        - i32::from(r + r_extra > 3141)
+                        - i32::from(r + r_extra > 4874 && new_depth > 2),
                     !cut_node,
                 );
             } else {
@@ -1060,21 +1116,7 @@ impl Worker {
                     }
                 };
                 if let Some(rm) = self.root_moves.iter_mut().find(|rm| rm.pv[0] == m) {
-                    rm.effort += current_nodes - node_count;
-                    rm.average_score = if rm.average_score == -VALUE_INFINITE {
-                        value
-                    } else {
-                        (value + rm.average_score) / 2
-                    };
-
-                    // meanSquaredScore update (unconditional, before alpha check)
-                    rm.mean_squared_score = if rm.mean_squared_score
-                        == -i64::from(VALUE_INFINITE) * i64::from(VALUE_INFINITE)
-                    {
-                        i64::from(value) * i64::from(value.abs())
-                    } else {
-                        (i64::from(value) * i64::from(value.abs()) + rm.mean_squared_score) / 2
-                    };
+                    rm.update_average(value, current_nodes - node_count);
 
                     if move_count == 1 || value > alpha {
                         rm.score = value;
@@ -1107,7 +1149,7 @@ impl Worker {
             let inc = i32::from(
                 value == best_value
                     && ply + 2 >= self.root_depth
-                    && (self.node_count() as i32).trailing_zeros() >= 4
+                    && (self.node_count() & 0b1110) == 0
                     && !is_win(value.abs() + 1),
             );
 
@@ -1135,8 +1177,8 @@ impl Worker {
                         self.ss_cutoff_cnts[ss] += i32::from(extension < 2 || pv_node);
                         break;
                     }
-                    if depth > 2 && depth < 11 && !is_decisive(value) {
-                        depth -= 2;
+                    if depth > 3 && depth < 11 && !is_decisive(value) {
+                        depth -= 3;
                     }
                     alpha = value;
                 }
@@ -1178,12 +1220,13 @@ impl Worker {
                 &captures_searched[..captures_count],
                 depth,
                 tt_data.tt_move,
+                pv_node,
             );
             if !pv_node {
                 let tt_bonus = if best_move == tt_data.tt_move {
-                    796
+                    799
                 } else {
-                    -855
+                    -863
                 };
                 self.tt_move_history.update(tt_bonus);
             }
@@ -1244,7 +1287,7 @@ impl Worker {
                 if captured_piece != crate::types::Piece::NONE {
                     let pc_on_prev = self.root_pos.piece_on(psq);
                     self.capture_history
-                        .update(pc_on_prev, psq, captured_piece.piece_type(), 983);
+                        .update(pc_on_prev, psq, captured_piece.piece_type(), 990);
                 }
             }
         }
@@ -1294,7 +1337,7 @@ impl Worker {
                     -super::history::CORRECTION_HISTORY_LIMIT / 4,
                     super::history::CORRECTION_HISTORY_LIMIT / 4,
                 );
-            self.update_correction_history(ply, 1069 * corr_bonus / 1024);
+            self.update_correction_history(ply, 1091 * corr_bonus / 1024);
         }
 
         best_value
@@ -1304,10 +1347,10 @@ impl Worker {
     /// Aligns with Pikafish `is_shuffling` (search.cpp:134-142).
     #[inline]
     fn is_shuffling(&self, m: Move, ss: usize, ply: i32) -> bool {
-        if self.root_pos.is_capture(m) || self.root_pos.rule60_count() < 11 {
+        if self.root_pos.is_capture(m) || self.root_pos.rule60_count() < 10 {
             return false;
         }
-        if self.root_pos.state().plies_from_null <= 6 || ply < 19 {
+        if self.root_pos.state().plies_from_null < 6 || ply < 20 {
             return false;
         }
         ss >= 4
@@ -1397,9 +1440,12 @@ mod tests {
             );
             position.do_move(movement, position.gives_check(movement));
         }
-        // Independently captured from Pikafish 76239d0b, Threads=1, Hash=16,
-        // the pinned model, ucinewgame, and go depth 8 (6565 nodes, cp 44).
-        let expected = ["d4c4", "h2f2", "f3f2", "d2f2", "d9e8", "a2c4", "h3i3"];
+        // Independently captured from Pikafish b562d6ae, Threads=1, Hash=16,
+        // the pinned model, ucinewgame, and go depth 8 (4232 nodes, cp 42).
+        let expected = [
+            "d4c4", "h2f2", "f3f2", "d2f2", "d9e8", "a2c4", "h3b3", "e0f0", "b3b0", "f0f1", "e4f4",
+            "f2i2",
+        ];
         assert_eq!(
             pv.iter().map(ToString::to_string).collect::<Vec<_>>(),
             expected

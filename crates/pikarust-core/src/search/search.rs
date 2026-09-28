@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::sync::Arc;
@@ -23,9 +24,10 @@ use super::history::{
 use super::time::{SearchLimits, TimeManager};
 use super::tt::TranspositionTable;
 
-pub const LMR_DIVISOR: [i32; 16] = [
-    3307, 2930, 2874, 2818, 3215, 3225, 3224, 2782, 2858, 2919, 3088, 3275, 3180, 2868, 3006, 3599,
-];
+pub fn lmr_divisor(depth: Depth) -> i32 {
+    let d = depth.min(16);
+    3000 + 7 * (d - 8) * (d - 8)
+}
 
 pub const SEARCHED_LIST_CAPACITY: usize = 32;
 const SS_OFFSET: usize = 7;
@@ -70,6 +72,7 @@ pub struct RootMove {
     pub sel_depth: i32,
     pub effort: u64,
     pub pv: Vec<Move>,
+    pub previous_pv: Vec<Move>,
 }
 
 impl RootMove {
@@ -85,8 +88,56 @@ impl RootMove {
             sel_depth: 0,
             effort: 0,
             pv: vec![m],
+            previous_pv: Vec::new(),
         }
     }
+
+    pub const fn is_inexact(&self) -> bool {
+        self.score_lowerbound || self.score_upperbound
+    }
+
+    pub const fn is_exact_loss(&self) -> bool {
+        self.score != -VALUE_INFINITE && crate::types::is_loss(self.score) && !self.is_inexact()
+    }
+
+    pub const fn unset_inexact(&mut self) {
+        self.score_lowerbound = false;
+        self.score_upperbound = false;
+    }
+
+    /// Effort-weighted averages with the upstream unsigned intermediate arithmetic.
+    pub(super) fn update_average(&mut self, value: Value, nodes: u64) {
+        let previous_effort = self.effort.max(1);
+        self.effort += nodes;
+        let weight = (64 * nodes / (2 * nodes + 3 * previous_effort)).clamp(12, 24);
+        let squared_weight = weight.min(16);
+        let squared = i64::from(value) * i64::from(value.abs());
+        self.average_score = if self.average_score == -VALUE_INFINITE {
+            value
+        } else {
+            weighted_score(i64::from(value), i64::from(self.average_score), weight)
+        };
+        self.mean_squared_score =
+            if self.mean_squared_score == -i64::from(VALUE_INFINITE) * i64::from(VALUE_INFINITE) {
+                squared
+            } else {
+                i64::from(weighted_score(
+                    squared,
+                    self.mean_squared_score,
+                    squared_weight,
+                ))
+            };
+    }
+}
+
+const fn weighted_score(value: i64, previous: i64, weight: u64) -> Value {
+    // C++ multiplies signed scores by u64 weights, divides the wrapping unsigned
+    // sum, then converts to Value. Signed division would round negative scores
+    // differently and change subsequent aspiration windows.
+    ((value as u64)
+        .wrapping_mul(weight)
+        .wrapping_add((previous as u64).wrapping_mul(32 - weight))
+        / 32) as Value
 }
 
 pub struct Worker {
@@ -109,7 +160,7 @@ pub struct Worker {
     pub main_history: ButterflyHistory,
     pub low_ply_history: LowPlyHistory,
     pub capture_history: CapturePieceToHistory,
-    pub continuation_history: ContinuationHistory,
+    pub continuation_history: Arc<ContinuationHistory>,
     pub pawn_history: PawnHistory,
     pub tt_move_history: TTMoveHistory,
     pub correction_history: UnifiedCorrectionHistory,
@@ -149,6 +200,7 @@ pub struct Worker {
     pub ss_follow_pvs: Vec<bool>,
     pub ss_cont_hist_indices: Vec<ContHistIndex>,
     pub ss_tt_hits: Vec<bool>,
+    pub ss_prior_nmp_fail_high: Vec<i32>,
     /// Per-ply PV arrays for PV propagation (matches Pikafish ss->pv).
     pub ss_pvs: Vec<Vec<Move>>,
 }
@@ -164,6 +216,31 @@ impl Worker {
         tot_best_move_changes: Arc<AtomicU64>,
         num_threads: usize,
         network: Option<Arc<Network>>,
+    ) -> Self {
+        Self::with_continuation_history(
+            thread_idx,
+            stop,
+            ponder,
+            tt,
+            increase_depth,
+            tot_best_move_changes,
+            num_threads,
+            network,
+            Arc::new(ContinuationHistory::new()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn with_continuation_history(
+        thread_idx: usize,
+        stop: Arc<AtomicBool>,
+        ponder: Arc<AtomicBool>,
+        tt: Arc<TranspositionTable>,
+        increase_depth: Arc<AtomicBool>,
+        tot_best_move_changes: Arc<AtomicU64>,
+        num_threads: usize,
+        network: Option<Arc<Network>>,
+        continuation_history: Arc<ContinuationHistory>,
     ) -> Self {
         let ss_size = MAX_PLY as usize + 10;
         let mut w = Self {
@@ -186,7 +263,7 @@ impl Worker {
             main_history: ButterflyHistory::new(),
             low_ply_history: LowPlyHistory::new(),
             capture_history: CapturePieceToHistory::new(),
-            continuation_history: ContinuationHistory::new(),
+            continuation_history,
             pawn_history: PawnHistory::new(),
             tt_move_history: TTMoveHistory::new(),
             correction_history: UnifiedCorrectionHistory::new(1),
@@ -225,6 +302,7 @@ impl Worker {
             ss_follow_pvs: vec![false; ss_size],
             ss_cont_hist_indices: vec![ContHistIndex::SENTINEL; ss_size],
             ss_tt_hits: vec![false; ss_size],
+            ss_prior_nmp_fail_high: vec![0; ss_size],
             ss_pvs: vec![Vec::new(); ss_size],
         };
         w.init_reductions();
@@ -233,18 +311,19 @@ impl Worker {
 
     fn init_reductions(&mut self) {
         for i in 1..self.reductions.len() {
-            self.reductions[i] = (1740.0 / 100.0 * (i as f64).ln()) as i32;
+            self.reductions[i] = (1713.0 / 100.0 * (i as f64).ln()) as i32;
         }
     }
 
     pub fn clear(&mut self) {
-        self.main_history.fill(0);
-        self.capture_history.fill(-607);
+        self.main_history.fill(-5);
+        self.stop_on_ponderhit = false;
+        self.capture_history.fill(-604);
         self.low_ply_history.fill(0);
-        self.continuation_history.fill(-436);
-        self.pawn_history.fill(-1247);
+        self.continuation_history.fill(-440);
+        self.pawn_history.fill(-1262);
         self.tt_move_history.reset();
-        self.correction_history.clear();
+        self.correction_history.fill(-6);
         self.continuation_correction_history.fill(7);
         self.init_reductions();
     }
@@ -269,13 +348,13 @@ impl Worker {
         let mn_idx = (mn as usize).min(self.reductions.len() - 1);
         let reduction_scale = self.reductions[d_idx] * self.reductions[mn_idx];
         let root_delta = self.root_delta.max(1);
-        reduction_scale - delta * 1138 / root_delta
+        reduction_scale - delta * 1128 / root_delta
             + if improving {
                 0
             } else {
-                reduction_scale * 166 / 512
+                reduction_scale * 165 / 512
             }
-            + 1934
+            + 1931
     }
 
     pub fn evaluate_pos(&mut self) -> Value {
@@ -477,6 +556,7 @@ impl Worker {
         self.ss_follow_pvs.fill(false);
         self.ss_cont_hist_indices.fill(ContHistIndex::SENTINEL);
         self.ss_tt_hits.fill(false);
+        self.ss_prior_nmp_fail_high.fill(0);
     }
 
     #[inline]
@@ -520,4 +600,45 @@ pub const fn value_from_tt(v: Value, ply: i32, r60c: i32) -> Value {
 
 pub fn to_corrected_static_eval(v: Value, cv: i32) -> Value {
     (v + cv / 131_072).clamp(VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effort_weighted_averages_preserve_negative_reference_rounding() {
+        let mut root = RootMove::new(Move::NONE);
+        root.effort = 5;
+        root.average_score = -100;
+        root.mean_squared_score = -10_000;
+        root.update_average(-101, 3);
+        // Independently evaluated with b562d6ae's u64-weighted C++ expressions.
+        // Both divisions have negative non-integral mathematical results.
+        assert_eq!(root.effort, 8);
+        assert_eq!(root.average_score, -101);
+        assert_eq!(root.mean_squared_score, -10_076);
+    }
+
+    #[test]
+    fn effort_weighted_average_caps_score_and_squared_score_weights_separately() {
+        let mut root = RootMove::new(Move::NONE);
+        root.effort = 1;
+        root.average_score = 100;
+        root.mean_squared_score = 10_000;
+        root.update_average(200, 100);
+        assert_eq!(root.average_score, 175);
+        assert_eq!(root.mean_squared_score, 25_000);
+    }
+
+    #[test]
+    fn bounded_mate_loss_is_not_an_exact_root_loss() {
+        let mut root = RootMove::new(Move::NONE);
+        root.score = crate::types::mated_in(4);
+        assert!(root.is_exact_loss());
+        root.score_lowerbound = true;
+        assert!(!root.is_exact_loss());
+        root.unset_inexact();
+        assert!(root.is_exact_loss());
+    }
 }

@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// 2026-09-28: current upstream feature-transformer serialization hash.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::sync::LazyLock;
@@ -13,7 +14,7 @@ use crate::types::{Color, Piece, PieceType, Square};
 use super::IndexList;
 use super::half_ka_v2_hm::{ALL_PIECES, INDEX_MAP, KING_BUCKETS, VALID_BB, requires_mid_mirror};
 
-pub const HASH_VALUE: u32 = 0x8f23_4cb8;
+pub const HASH_VALUE: u32 = 0x2e6b_9d04;
 pub const DIMENSIONS: u32 = 45_547;
 pub const MAX_ACTIVE_DIMENSIONS: usize = 64;
 

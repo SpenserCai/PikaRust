@@ -84,6 +84,13 @@ fallback depends on the working directory and available files, it is unsuitable
 as proof that a benchmark or deployed service is using NNUE. Check `has_nnue()`
 or use an explicit constructor.
 
+The loader accepts the current NNUE architecture listed in
+[`models/README.md`](../models/README.md), validating its version and structural
+hashes before decoding. Historical formats return an explicit load error.
+The `Engine` constructors accept other models with a compatible structure;
+reference comparisons require the exact pinned network. The `Network`
+evaluation tuple retains the PSQT and positional components for diagnostics.
+
 Internal evaluation values and normalized UCI centipawns are different units.
 Consumers should use the fields appropriate to their interface, preserve mate
 score semantics, and avoid converting a mate into an ordinary numeric cp score.

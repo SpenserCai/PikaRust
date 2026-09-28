@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// 2026-09-28: current concatenated architecture and output scaling.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use crate::types::{Color, Piece, PieceType, Value};
@@ -59,7 +60,7 @@ pub fn make_layer_stack_bucket(piece_count: &[u8; Piece::NUM], side_to_move: Col
         [opp_kc.min(4) as usize] as usize
 }
 
-const FC0_OUTPUTS: usize = L2_BIG + 1; // 32
+const FC0_OUTPUTS: usize = L2_BIG;
 
 pub struct Network {
     model: NnueModel,
@@ -165,49 +166,53 @@ impl Network {
             &nnz_indices[..nnz_count],
         );
 
-        let mut sqr_relu_out = [0u8; L2_BIG];
+        // Each hidden layer contributes both squared and linear activations.
+        // File weights remain in canonical order; the dispatch kernels do not
+        // require Pikafish's architecture-specific packing permutation.
+        let mut concat = [0u8; L2_BIG * 2 + L3_BIG * 2];
         self.simd
-            .sqr_clipped_relu(&fc0_out[..L2_BIG], &mut sqr_relu_out, WEIGHT_SCALE_BITS);
-
-        let mut relu_out = [0u8; L2_BIG];
-        self.simd
-            .clipped_relu(&fc0_out[..L2_BIG], &mut relu_out, WEIGHT_SCALE_BITS);
-
-        // FC1 uses 62 activations in a 64-element padded input. The padding
-        // must be present and zero for both scalar and vector backends.
-        let mut concat = [0u8; 64];
-        concat[..L2_BIG].copy_from_slice(&sqr_relu_out);
-        concat[L2_BIG..L2_BIG * 2].copy_from_slice(&relu_out);
+            .sqr_clipped_relu(&fc0_out, &mut concat[..L2_BIG], WEIGHT_SCALE_BITS + 1);
+        self.simd.clipped_relu(
+            &fc0_out,
+            &mut concat[L2_BIG..L2_BIG * 2],
+            WEIGHT_SCALE_BITS + 1,
+        );
 
         let mut fc1_out = [0i32; L3_BIG];
         self.simd.affine_propagate(
-            &concat,
+            &concat[..L2_BIG * 2],
             &ls.fc1_weights,
             ls.fc1_biases.as_slice(),
             &mut fc1_out,
-            64,
+            L2_BIG * 2,
             L3_BIG,
         );
-
-        let mut fc1_relu = [0u8; L3_BIG];
-        self.simd
-            .clipped_relu(&fc1_out, &mut fc1_relu, WEIGHT_SCALE_BITS);
+        self.simd.sqr_clipped_relu(
+            &fc1_out,
+            &mut concat[L2_BIG * 2..L2_BIG * 2 + L3_BIG],
+            WEIGHT_SCALE_BITS,
+        );
+        self.simd.clipped_relu(
+            &fc1_out,
+            &mut concat[L2_BIG * 2 + L3_BIG..],
+            WEIGHT_SCALE_BITS,
+        );
 
         let mut fc2_out = [0i32; 1];
         self.simd.affine_propagate(
-            &fc1_relu,
+            &concat,
             &ls.fc2_weights,
             ls.fc2_biases.as_slice(),
             &mut fc2_out,
-            32,
+            concat.len(),
             1,
         );
-
-        let skip = i64::from(fc0_out[L2_BIG]);
-        let fwd_out =
-            (skip * (600 * i64::from(OUTPUT_SCALE))) / (127 * (1i64 << WEIGHT_SCALE_BITS));
-
-        (fc2_out[0] + fwd_out as i32) / OUTPUT_SCALE
+        let forward =
+            fc2_out[0].wrapping_add(fc0_out[L2_BIG - 2].wrapping_sub(fc0_out[L2_BIG - 1]));
+        let scaled = i64::from(forward) * (600 * i64::from(OUTPUT_SCALE))
+            / (128 * (1i64 << WEIGHT_SCALE_BITS) * 2);
+        // Keep the two divisions separate, as in upstream architecture/network.
+        (scaled as i32) / OUTPUT_SCALE
     }
 }
 

@@ -11,7 +11,7 @@ on:
         options: [official, regression]
         default: official
       baseline_ref:
-        description: Regression baseline commit or tag with a committed Cargo.lock
+        description: Baseline commit/tag with Cargo.lock and current-model support (v0.2.0 is incompatible)
         type: string
         default: ''
 

@@ -413,6 +413,15 @@ class ArtifactTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "matching GPL corresponding source"):
                 release.validate_archive(archive, "0.1.0", self.sha, target)
 
+    def test_native_archives_require_current_model_reference_pin(self):
+        for target in (release.TARGETS[0], release.TARGETS[2]):
+            release.package(target, self.output)
+            archive = self.output / release.archive_name("0.1.0", target)
+            with self.subTest(target=target):
+                self.changed_archive(archive, remove="scripts/reference.lock")
+                with self.assertRaisesRegex(ValueError, "missing or empty"):
+                    release.validate_archive(archive, "0.1.0", self.sha, target)
+
     def test_dependency_missing_license_requires_explicit_versioned_supplement(self):
         vendor = self.root / "target/vendor"
         self.fixture_vendor(vendor)

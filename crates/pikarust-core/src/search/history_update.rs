@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 //! History update functions matching Pikafish's `update_all_stats`,
@@ -15,10 +16,10 @@ use super::search::Worker;
 
 /// Conthist bonus weights: (offset, weight) pairs matching Pikafish.
 const CONTHIST_BONUSES: [(usize, i32); 6] =
-    [(1, 1076), (2, 639), (3, 293), (4, 523), (5, 129), (6, 445)];
+    [(1, 538), (2, 319), (3, 146), (4, 260), (5, 64), (6, 221)];
 
 /// Multipliers for positive history consistency (index 0 unused, 1..=6 used).
-const CMHC_MULTIPLIERS: [i32; 7] = [96, 100, 100, 100, 115, 118, 129];
+const CMHC_MULTIPLIERS: [i32; 7] = [98, 100, 101, 100, 116, 119, 129];
 
 impl Worker {
     /// Compute the correction value from all correction history tables.
@@ -64,12 +65,18 @@ impl Worker {
                     .get(pc, to),
             );
 
-            v2 + v4
+            let idx6 = self.cont_corr_index(ss, 6);
+            let v6 = i32::from(
+                self.continuation_correction_history
+                    .get(idx6.pc, idx6.sq)
+                    .get(pc, to),
+            );
+            8006 * (v2 + v4) + 6403 * v6
         } else {
-            8
+            90287
         };
 
-        4547 * pcv + 3804 * micv + 8213 * (wnpcv + bnpcv) + 8982 * cntcv
+        4136 * pcv + 3448 * micv + 7512 * (wnpcv + bnpcv) + cntcv
     }
 
     /// Update all correction history tables.
@@ -86,7 +93,7 @@ impl Worker {
         let bnp_key = self.root_pos.non_pawn_key(Color::Black);
 
         self.correction_history.entry_mut(pawn_key)[us.index()].update_pawn(bonus);
-        self.correction_history.entry_mut(minor_key)[us.index()].update_minor(bonus * 145 / 128);
+        self.correction_history.entry_mut(minor_key)[us.index()].update_minor(bonus * 146 / 128);
         self.correction_history.entry_mut(wnp_key)[us.index()]
             .update_non_pawn_white(bonus * NON_PAWN_WEIGHT / 128);
         self.correction_history.entry_mut(bnp_key)[us.index()]
@@ -114,6 +121,11 @@ impl Worker {
             self.continuation_correction_history
                 .get_mut(idx4.pc, idx4.sq)
                 .update(pc, to, bonus * 63 / 128);
+
+            let idx6 = self.cont_corr_index(ss, 6);
+            self.continuation_correction_history
+                .get_mut(idx6.pc, idx6.sq)
+                .update(pc, to, bonus * 35 / 128);
         }
     }
 
@@ -129,6 +141,7 @@ impl Worker {
         captures_searched: &[Move],
         depth: i32,
         tt_move: Move,
+        pv_node: bool,
     ) {
         let ss = self.ss_idx(ply);
         let moved_piece = self.root_pos.moved_piece(best_move);
@@ -138,10 +151,16 @@ impl Worker {
         } else {
             0
         };
-        let bonus = (162 * depth - 87).min(1602)
-            + 336 * i32::from(best_move == tt_move)
+        let mut bonus = (161 * depth - 87).min(1608)
+            + 331 * i32::from(best_move == tt_move)
             + stat_score_prev / 32;
-        let malus = (870 * depth - 148).min(2000);
+        let malus = (859 * depth - 149).min(2041);
+        if !pv_node {
+            // Preserve the reference's unsigned 64-bit multiplication before division.
+            bonus += ((bonus as u64)
+                .wrapping_mul((quiets_searched.len() + captures_searched.len()) as u64)
+                / 256) as i32;
+        }
 
         if self.root_pos.is_capture(best_move) {
             // Increase stats for the best move in case it was a capture move
@@ -150,15 +169,15 @@ impl Worker {
                 moved_piece,
                 best_move.to_sq(),
                 captured_pt,
-                bonus * 1455 / 1024,
+                bonus * 1469 / 1024,
             );
         } else {
-            self.update_quiet_histories(ply, best_move, bonus * 899 / 1024);
+            self.update_quiet_histories(ply, best_move, bonus * 893 / 1024);
 
-            let mut actual_malus = malus * 1100 / 1024;
+            let mut actual_malus = malus * 1108 / 1024;
             // Decrease stats for all non-best quiet moves
             for &qm in quiets_searched {
-                actual_malus = actual_malus * 950 / 1024;
+                actual_malus = actual_malus * 955 / 1024;
                 self.update_quiet_histories(ply, qm, -actual_malus);
             }
         }
@@ -173,7 +192,7 @@ impl Worker {
                 && self.root_pos.captured_piece() == Piece::NONE
             {
                 let pc_on_prev = self.root_pos.piece_on(psq);
-                self.update_continuation_histories(ply - 1, pc_on_prev, psq, -malus * 617 / 1024);
+                self.update_continuation_histories(ply - 1, pc_on_prev, psq, -malus * 620 / 1024);
             }
         }
 
@@ -182,7 +201,7 @@ impl Worker {
             let cap_moved = self.root_pos.moved_piece(cm);
             let cap_pt = self.root_pos.piece_on(cm.to_sq()).piece_type();
             self.capture_history
-                .update(cap_moved, cm.to_sq(), cap_pt, -malus * 1440 / 1024);
+                .update(cap_moved, cm.to_sq(), cap_pt, -malus * 1467 / 1024);
         }
     }
 
@@ -199,18 +218,18 @@ impl Worker {
         // lowPlyHistory
         if (ply as usize) < LOW_PLY_HISTORY_SIZE {
             self.low_ply_history
-                .update(ply as usize, m, bonus * 693 / 1024);
+                .update(ply as usize, m, bonus * 700 / 1024);
         }
 
         // continuation histories
-        self.update_continuation_histories(ply, moved_piece, to, bonus * 972 / 1024);
+        self.update_continuation_histories(ply, moved_piece, to, bonus * 964 / 1024);
 
         // pawn history
         let pawn_key = self.root_pos.pawn_key();
-        let pawn_bonus = if bonus > 0 {
+        let pawn_bonus = if bonus > -7 {
             bonus * 913 / 1024
         } else {
-            bonus * 553 / 1024
+            bonus * 561 / 1024
         };
         self.pawn_history
             .entry_mut(pawn_key)
@@ -253,11 +272,11 @@ impl Worker {
             }
 
             let multiplier = CMHC_MULTIPLIERS[positive_count.min(6)];
-            let adjusted_bonus = (bonus * weight * multiplier / 131_072) + 83 * i32::from(i < 2);
+            let adjusted_bonus = (bonus * weight * multiplier / 65_536) + 83 * i32::from(i < 2);
 
             // Now update the entry
             self.continuation_history
-                .get_mut(idx.in_check, idx.capture, idx.pc, idx.sq)
+                .get(idx.in_check, idx.capture, idx.pc, idx.sq)
                 .update(pc, to, adjusted_bonus);
         }
     }

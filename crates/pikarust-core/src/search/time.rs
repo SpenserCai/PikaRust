@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::time::Instant;
@@ -96,17 +97,13 @@ impl TimeManager {
             return;
         }
 
-        let time_ms = limits.time[us.index()] as f64;
+        let time_ms = limits.time[us.index()].max(1) as f64;
         let inc_ms = limits.inc[us.index()] as f64;
         let overhead = move_overhead as f64;
 
-        if time_ms == 0.0 {
-            return;
-        }
-
         let scaled_time = time_ms;
 
-        let mtg = if scaled_time < 1000.0 {
+        let mtg = if scaled_time < 1000.0 && limits.movestogo == 0 {
             (scaled_time * 0.05) as i32
         } else if limits.movestogo > 0 {
             limits.movestogo.min(50)
@@ -114,7 +111,6 @@ impl TimeManager {
             50
         };
 
-        let mtg = mtg.max(1);
         let mtg_f64 = f64::from(mtg);
 
         let time_left = inc_ms
@@ -122,7 +118,7 @@ impl TimeManager {
             .mul_add(1.0, -overhead * (2.0 + mtg_f64))
             .max(1.0);
 
-        let (opt_scale, max_scale) = if limits.movestogo == 0 {
+        let (mut opt_scale, max_scale) = if limits.movestogo == 0 {
             if self.original_time_adjust < 0.0 {
                 self.original_time_adjust = 0.3356f64.mul_add(time_left.log10(), -0.4903);
             }
@@ -149,10 +145,16 @@ impl TimeManager {
             (os, ms)
         };
 
+        if limits.movestogo != 1 {
+            let opponent_time = limits.time[(!us).index()] as f64;
+            let advantage = (time_ms - opponent_time) / (1.0 + time_ms + opponent_time);
+            opt_scale *= 0.9f64.mul_add(advantage.min(0.0), 1.0);
+        }
+
         self.optimum_time = (opt_scale * time_left).max(1.0) as TimePoint;
         self.maximum_time = (max_scale * self.optimum_time as f64)
-            .max(self.optimum_time as f64)
-            .min(0.8237f64.mul_add(time_ms, -overhead)) as TimePoint;
+            .min(0.8237f64.mul_add(time_ms, -overhead))
+            .max(self.optimum_time as f64) as TimePoint;
 
         if ponder {
             self.optimum_time += self.optimum_time / 4;
@@ -273,5 +275,44 @@ mod tests {
         tm2.init(&limits, Color::White, 10, 50, true);
 
         assert!(tm2.optimum() > tm1.optimum());
+    }
+
+    #[test]
+    fn time_disadvantage_reduces_budget_except_at_cycle_boundary() {
+        let mut limits = SearchLimits::new();
+        limits.time = [60_000, 60_000];
+        let mut equal = TimeManager::new();
+        equal.init(&limits, Color::White, 10, 10, false);
+        limits.time[Color::Black.index()] = 180_000;
+        let mut behind = TimeManager::new();
+        behind.init(&limits, Color::White, 10, 10, false);
+        assert!(behind.optimum() < equal.optimum());
+
+        limits.movestogo = 1;
+        behind.init(&limits, Color::White, 10, 10, false);
+        limits.time[Color::Black.index()] = 60_000;
+        equal.init(&limits, Color::White, 10, 10, false);
+        assert_eq!(behind.optimum(), equal.optimum());
+    }
+
+    #[test]
+    fn subsecond_cyclic_clock_keeps_supplied_move_horizon() {
+        let mut limits = SearchLimits::new();
+        limits.time = [500, 500];
+        limits.movestogo = 40;
+        let mut tm = TimeManager::new();
+        tm.init(&limits, Color::White, 10, 0, false);
+        // Upstream cyclic formula: floor(((0.88 + 10 / 116.4) / 40) * 500).
+        assert_eq!(tm.optimum(), 12);
+    }
+
+    #[test]
+    fn exhausted_clock_keeps_minimum_finite_time_budget() {
+        let mut limits = SearchLimits::new();
+        limits.time = [0, 60_000];
+        let mut tm = TimeManager::new();
+        tm.init(&limits, Color::White, 10, 10, false);
+        assert_eq!(tm.optimum(), 1);
+        assert_eq!(tm.maximum(), 1);
     }
 }

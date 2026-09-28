@@ -1,7 +1,7 @@
 Upstream copyright and permission notices
 
 Source: https://github.com/official-pikafish/Pikafish
-Revision: 76239d0b06720bfa4588989fd4ac7573e9dbf887
+Revision: b562d6aeac5401879e973dc53ddb56053f07bb6a
 
 These original headers are retained verbatim. Rust adaptations and changes
 are documented in NOTICE.md; the GPL text is in LICENSE.

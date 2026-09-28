@@ -153,6 +153,18 @@ class OrchestrationTests(unittest.TestCase):
                 run.assert_not_called()
             self.assertEqual(json.loads((output / "report.json").read_text())["status"], "failed")
 
+    def test_other_model_cannot_replace_current_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "other.nnue"
+            model.write_bytes(b"previous or unrelated model")
+            output = Path(directory) / "run"
+            with patch.dict(bench.os.environ, {"PIKARUST_NNUE_MODEL": str(model)}), patch.object(bench, "run_logged") as run, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(bench.main(["--output", str(output)]), 1)
+                run.assert_not_called()
+            report = json.loads((output / "report.json").read_text())
+            self.assertEqual(report["status"], "failed")
+            self.assertIn("NNUE SHA-256 differs from reference.lock", report["error"])
+
     def test_nonzero_process_is_not_parsed_as_success(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(bench.BenchError):
