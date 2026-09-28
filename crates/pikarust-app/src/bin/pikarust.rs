@@ -369,7 +369,11 @@ fn convert_go_params(params: &GoParams) -> Result<SearchLimits, String> {
         movetime: signed(params.movetime)?,
         infinite: params.infinite,
         ponder: params.ponder,
-        search_moves: params.searchmoves.clone(),
+        search_moves: params
+            .searchmoves
+            .iter()
+            .map(|movement| movement.to_ascii_lowercase())
+            .collect(),
     };
     limits.validate().map_err(|error| error.to_string())?;
     Ok(limits)

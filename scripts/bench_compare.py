@@ -69,7 +69,7 @@ def read_pin():
         if line and not line.startswith("#"):
             key, value = line.split("=", 1)
             values[key] = value
-    for key in ("PIKAFISH_REPOSITORY", "PIKAFISH_COMMIT", "PIKAFISH_NNUE_SHA256"):
+    for key in ("PIKAFISH_REPOSITORY", "PIKAFISH_COMMIT", "PIKAFISH_NNUE_SHA256", "PIKAFISH_NNUE_FILE"):
         require(key in values, f"Missing {key} in reference.lock")
     return values
 
@@ -216,7 +216,7 @@ def candidate_provenance(output):
 
 def prepare(args, output, report):
     pin = read_pin()
-    model = Path(os.environ.get("PIKARUST_NNUE_MODEL", ROOT / "models/pikafish.nnue")).resolve()
+    model = Path(os.environ.get("PIKARUST_NNUE_MODEL", ROOT / pin["PIKAFISH_NNUE_FILE"])).resolve()
     require(model.is_file(), f"Missing NNUE model: {model}; run git lfs pull")
     require(sha256(model) == pin["PIKAFISH_NNUE_SHA256"], "NNUE SHA-256 differs from reference.lock")
     report.update(pin=pin, machine=cpu_metadata(args.cpu), candidate=candidate_provenance(output),
@@ -263,7 +263,8 @@ def prepare(args, output, report):
     compiler = command_output([str(reference)], cwd=inputs, input_text="compiler\nquit\n")
     require(re.search(rf"Compilation architecture\s*:\s*{re.escape(architecture)}\s*$", compiler, re.M),
             "Reference binary does not report the requested compilation architecture")
-    source = Path(env.get("PIKAFISH_SOURCE_DIR", ROOT / "tests/fixtures/pikafish/source")).resolve()
+    default_source = ROOT / f"tests/fixtures/pikafish/source-{pin['PIKAFISH_COMMIT'][:12]}"
+    source = Path(env.get("PIKAFISH_SOURCE_DIR", default_source)).resolve()
     report["reference"] = dict(reference_meta, repository=pin["PIKAFISH_REPOSITORY"],
                                source=str(source), output=str(fixtures), compiler=compiler, build_command=setup)
     report["comparison_scope"] = (

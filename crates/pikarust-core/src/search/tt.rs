@@ -2,11 +2,14 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicUsize, Ordering};
 
-use crate::types::{Bound, DEPTH_NONE, Depth, Key, Move, VALUE_NONE, Value};
+use crate::types::{
+    Bound, DEPTH_NONE, Depth, Key, Move, VALUE_INFINITE, VALUE_NONE, Value, is_decisive,
+};
 
 const GENERATION_BITS: u8 = 5;
 const GENERATION_MASK: u8 = (1 << GENERATION_BITS) - 1;
@@ -157,6 +160,14 @@ impl TTEntry {
             self.gen_bound8.store(gen_bound8, Ordering::Relaxed);
             self.value16.store(v as u16, Ordering::Relaxed);
             self.eval16.store(ev as u16, Ordering::Relaxed);
+        } else if i32::from(self.depth8()) + DEPTH_NONE >= 5
+            && ((self.gen_bound8() >> BOUND_SHIFT) & 3) != Bound::Exact as u8
+        {
+            let value = i32::from(self.value16.load(Ordering::Relaxed) as i16);
+            if value.abs() < VALUE_INFINITE && is_decisive(value) {
+                self.depth8
+                    .store(self.depth8().saturating_sub(1), Ordering::Relaxed);
+            }
         }
     }
 }
@@ -189,6 +200,22 @@ pub struct TTWriter {
 }
 
 impl TTWriter {
+    /// Ages a mismatched bound without changing its move, value or generation.
+    /// Returns `false` if the original table has been replaced or resized.
+    pub fn penalize(&self, table: &TranspositionTable, penalty: u8) -> bool {
+        if self.table_id != table.id {
+            return false;
+        }
+        let Some(cluster) = table.clusters.get(self.slot / CLUSTER_SIZE) else {
+            return false;
+        };
+        let entry = &cluster.entries[self.slot % CLUSTER_SIZE];
+        entry
+            .depth8
+            .store(entry.depth8().saturating_sub(penalty), Ordering::Relaxed);
+        true
+    }
+
     /// Attempts to save data in the slot selected by the original probe.
     ///
     /// Returns `false` without writing if `table` is a different table or has
@@ -360,6 +387,45 @@ fn mul_hi64(a: u64, b: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mismatched_bound_penalty_preserves_other_fields_and_rejects_stale_handles() {
+        let mut table = TranspositionTable::new(1);
+        let key = 0x1234;
+        let probe = table.probe(key);
+        probe
+            .writer
+            .write(&table, key, 123, true, Bound::Lower, 10, Move::NONE, 111, 0);
+        assert!(probe.writer.penalize(&table, 1));
+        let aged = table.probe(key);
+        assert!(aged.found);
+        assert_eq!(aged.data.depth, 9);
+        assert_eq!(aged.data.value, 123);
+        assert_eq!(aged.data.eval, 111);
+        assert_eq!(aged.data.bound, Bound::Lower);
+        assert!(aged.data.is_pv);
+        table.resize(2);
+        assert!(!probe.writer.penalize(&table, 1));
+    }
+
+    #[test]
+    fn secondary_aging_only_decreases_deep_nonexact_decisive_entries() {
+        let table = TranspositionTable::new(1);
+        for (key, bound, value, expected_depth) in [
+            (1, Bound::Lower, crate::types::mate_in(8), 9),
+            (2, Bound::Upper, crate::types::mated_in(8), 9),
+            (3, Bound::Exact, crate::types::mate_in(8), 10),
+            (4, Bound::Lower, 200, 10),
+            (5, Bound::Lower, VALUE_NONE, 10),
+        ] {
+            let writer = table.probe(key).writer;
+            writer.write(&table, key, value, false, bound, 10, Move::NONE, 0, 0);
+            writer.write(&table, key, 100, false, Bound::Upper, 2, Move::NONE, 0, 0);
+            let actual = table.probe(key).data;
+            assert_eq!(actual.depth, expected_depth, "key {key}");
+            assert_eq!(actual.value, value, "aging must not replace the value");
+        }
+    }
     use crate::types::Square;
 
     #[test]

@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use crate::position::rule_judge::RuleJudgeResult;
@@ -128,7 +129,7 @@ impl Worker {
             // Stand pat
             if best_value >= beta {
                 if !is_decisive(best_value) {
-                    best_value = (best_value + beta) / 2;
+                    best_value = (464 * best_value + 560 * beta) / 1024;
                 }
                 if !tt_hit {
                     tt_writer.write(
@@ -150,7 +151,7 @@ impl Worker {
                 alpha = best_value;
             }
 
-            self.ss_static_evals[ss] + 220
+            self.ss_static_evals[ss] + 219
         };
 
         let prev_sq = if ss > 0 && self.ss_current_moves[ss - 1].is_ok() {
@@ -269,7 +270,7 @@ impl Worker {
         }
 
         if !is_decisive(best_value) && best_value > beta {
-            best_value = (best_value + beta) / 2;
+            best_value = (477 * best_value + 547 * beta) / 1024;
         }
 
         tt_writer.write(

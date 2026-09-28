@@ -2,6 +2,7 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use std::mem;
@@ -13,7 +14,7 @@ use std::thread;
 use crate::nnue::Network;
 use crate::position::rule_judge::RuleJudgeResult;
 use crate::position::{GenType, Position, generate};
-use crate::types::{Move, VALUE_INFINITE, VALUE_NONE, Value, is_decisive};
+use crate::types::{Move, VALUE_INFINITE, Value, is_decisive, is_loss};
 
 use super::search::{RootMove, Worker};
 use super::time::SearchLimits;
@@ -41,10 +42,11 @@ impl ThreadPool {
         let tt = Arc::new(TranspositionTable::new(tt_size_mb));
         let increase_depth = Arc::new(AtomicBool::new(true));
         let tot_best_move_changes = Arc::new(AtomicU64::new(0));
+        let continuation_history = Arc::new(super::history::ContinuationHistory::new());
 
         let mut workers = Vec::with_capacity(num_threads);
         for i in 0..num_threads {
-            workers.push(Worker::new(
+            workers.push(Worker::with_continuation_history(
                 i,
                 Arc::clone(&stop),
                 Arc::clone(&ponder),
@@ -53,6 +55,7 @@ impl ThreadPool {
                 Arc::clone(&tot_best_move_changes),
                 num_threads,
                 network.clone(),
+                Arc::clone(&continuation_history),
             ));
         }
 
@@ -111,6 +114,9 @@ impl ThreadPool {
 
     pub fn start_search(&mut self, pos: &Position, limits: &SearchLimits) {
         self.recover_workers();
+        for worker in &mut self.workers {
+            worker.stop_on_ponderhit = false;
+        }
 
         // Each search owns its cancellation flags. Handles from a completed
         // search must never be able to cancel or resume a later search.
@@ -154,6 +160,7 @@ impl ThreadPool {
                 let num_threads = w.num_threads;
                 let network = w.network.clone();
                 let thread_idx = w.thread_idx;
+                let continuation_history = Arc::clone(&w.continuation_history);
 
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     w.iterative_deepening();
@@ -170,7 +177,7 @@ impl ThreadPool {
                         log::error!("search worker {thread_idx} panicked: {msg}");
                         failed.store(true, Ordering::Relaxed);
                         stop.store(true, Ordering::SeqCst);
-                        let mut recovered = Worker::new(
+                        let mut recovered = Worker::with_continuation_history(
                             thread_idx,
                             stop,
                             ponder,
@@ -179,6 +186,7 @@ impl ThreadPool {
                             tot_best_move_changes,
                             num_threads,
                             network,
+                            continuation_history,
                         );
                         recovered.clear();
                         recovered
@@ -300,7 +308,14 @@ fn extract_search_result(workers: &[Worker]) -> SearchResult {
         return SearchResult::default();
     }
 
-    let best_idx = find_best_thread_idx(workers);
+    // Fixed-depth searches are defined by the main worker's completed search.
+    // Helpers can search beyond that depth; their votes apply only without a
+    // depth limit, matching Pikafish's final best-thread selection.
+    let best_idx = if workers[0].limits.depth > 0 {
+        0
+    } else {
+        find_best_thread_idx(workers)
+    };
     let nodes: u64 = workers.iter().map(Worker::node_count).sum();
     let best_move = if workers[best_idx].root_moves.is_empty() {
         Move::NONE
@@ -358,7 +373,7 @@ fn find_best_thread_idx(workers: &[Worker]) -> usize {
         return 0;
     }
 
-    let mut min_score = VALUE_NONE;
+    let mut min_score = VALUE_INFINITE;
     for w in workers {
         if !w.root_moves.is_empty() {
             min_score = min_score.min(w.root_moves[0].score);
@@ -371,7 +386,7 @@ fn find_best_thread_idx(workers: &[Worker]) -> usize {
         if w.root_moves.is_empty() {
             return 0;
         }
-        i64::from(w.root_moves[0].score - min_score + 14) * i64::from(w.completed_depth)
+        i64::from(w.root_moves[0].score - min_score + 14)
     };
 
     for w in workers {
@@ -381,32 +396,36 @@ fn find_best_thread_idx(workers: &[Worker]) -> usize {
         }
     }
 
-    let mut best_idx = 0;
-    let mut best_voting = i64::MIN;
+    let mut best_idx = workers
+        .iter()
+        .position(|w| !w.root_moves.is_empty())
+        .unwrap_or(0);
 
     for (i, w) in workers.iter().enumerate() {
         if w.root_moves.is_empty() {
             continue;
         }
-        let key = w.root_moves[0].pv[0].raw();
-        let v = votes.get(&key).copied().unwrap_or(0);
+        let new_move = &w.root_moves[0];
+        let best_move = &workers[best_idx].root_moves[0];
+        let new_vote = votes[&new_move.pv[0].raw()];
+        let best_vote = votes[&best_move.pv[0].raw()];
+        let new_decisive = new_move.score != -VALUE_INFINITE
+            && is_decisive(new_move.score)
+            && !new_move.is_inexact();
+        let best_decisive = best_move.score != -VALUE_INFINITE
+            && is_decisive(best_move.score)
+            && !best_move.is_inexact();
 
-        let score = w.root_moves[0].score;
-        let is_decisive_score = score != -VALUE_INFINITE && is_decisive(score);
-
-        if is_decisive_score {
-            if i == best_idx
-                || !is_decisive(workers[best_idx].root_moves[0].score)
-                || score.abs() > workers[best_idx].root_moves[0].score.abs()
-            {
+        if best_decisive {
+            if new_decisive && new_move.score.abs() > best_move.score.abs() {
                 best_idx = i;
             }
-        } else if !is_decisive(workers[best_idx].root_moves[0].score)
-            && (v > best_voting
-                || (v == best_voting && voting_value(w) > voting_value(&workers[best_idx])))
+        } else if new_decisive
+            || (!is_loss(new_move.score)
+                && (new_vote > best_vote
+                    || (new_vote == best_vote && new_move.pv.len() > best_move.pv.len())))
         {
             best_idx = i;
-            best_voting = v;
         }
     }
 
@@ -461,6 +480,83 @@ mod tests {
     }
 
     #[test]
+    fn workers_share_continuation_updates_without_sharing_local_histories() {
+        let mut pool = ThreadPool::new(2, 1, None);
+        pool.clear();
+        assert!(Arc::ptr_eq(
+            &pool.workers[0].continuation_history,
+            &pool.workers[1].continuation_history
+        ));
+        let entry =
+            pool.workers[0]
+                .continuation_history
+                .get(false, false, Piece::W_KNIGHT, Square::SQ_B0);
+        entry.update(Piece::W_PAWN, Square::SQ_A3, 1000);
+        assert_eq!(
+            history_biases(&pool.workers[0]),
+            history_biases(&pool.workers[1])
+        );
+        assert_ne!(history_biases(&pool.workers[1])[1], -440);
+        pool.workers[0].capture_history.fill(123);
+        assert_ne!(
+            history_biases(&pool.workers[0])[0],
+            history_biases(&pool.workers[1])[0]
+        );
+    }
+
+    #[test]
+    fn worker_selection_uses_exact_mates_and_pv_length_instead_of_depth_votes() {
+        let mut pool = ThreadPool::new(2, 1, None);
+        let first = Move::make(Square::SQ_B0, Square::SQ_C2);
+        let second = Move::make(Square::SQ_H0, Square::SQ_G2);
+        for (worker, movement) in pool.workers.iter_mut().zip([first, second]) {
+            worker.root_moves.push(RootMove::new(movement));
+            worker.root_moves[0].score = 100;
+        }
+        pool.workers[0].root_moves[0].pv.push(second);
+        pool.workers[0].completed_depth = 2;
+        pool.workers[1].completed_depth = 20;
+        assert_eq!(find_best_thread_idx(&pool.workers), 0);
+
+        pool.workers[1].root_moves[0].score = crate::types::mated_in(4);
+        pool.workers[1].root_moves[0].score_lowerbound = true;
+        assert_eq!(find_best_thread_idx(&pool.workers), 0);
+        pool.workers[1].root_moves[0].unset_inexact();
+        assert_eq!(find_best_thread_idx(&pool.workers), 1);
+    }
+
+    #[test]
+    fn fixed_depth_result_uses_main_worker_but_sums_all_worker_nodes() {
+        let mut pool = ThreadPool::new(2, 1, None);
+        let main_move = Move::make(Square::SQ_B0, Square::SQ_C2);
+        let helper_move = Move::make(Square::SQ_H0, Square::SQ_G2);
+        for (i, worker) in pool.workers.iter_mut().enumerate() {
+            worker.root_pos = Position::start_pos().unwrap();
+            worker.limits.depth = 8;
+            worker.completed_depth = 8 + 3 * i as i32;
+            worker
+                .root_moves
+                .push(RootMove::new([main_move, helper_move][i]));
+            worker.root_moves[0].score = 100 + 100 * i as i32;
+            worker.nodes.store(101 * (i as u64 + 1), Ordering::Relaxed);
+        }
+        assert_eq!(find_best_thread_idx(&pool.workers), 1);
+        let result = extract_search_result(&pool.workers);
+        assert_eq!(result.best_move, main_move);
+        assert_eq!(result.score, 100);
+        assert_eq!(result.depth, 8);
+        assert_eq!(result.nodes, 303);
+
+        for worker in &mut pool.workers {
+            worker.limits.depth = 0;
+        }
+        let result = extract_search_result(&pool.workers);
+        assert_eq!(result.best_move, helper_move);
+        assert_eq!(result.score, 200);
+        assert_eq!(result.nodes, 303);
+    }
+
+    #[test]
     fn recovered_worker_matches_canonical_initialization() {
         let mut recovered = ThreadPool::new(1, 1, None);
         let mut fresh = ThreadPool::new(1, 1, None);
@@ -499,6 +595,47 @@ mod tests {
         assert_eq!(actual.depth, expected.depth);
         assert_eq!(actual.nodes, expected.nodes);
         assert_eq!(actual.pv, expected.pv);
+    }
+
+    #[test]
+    fn previous_ponder_stop_does_not_abort_a_new_clocked_search() {
+        let mut pool = ThreadPool::new(1, 1, None);
+        pool.clear();
+        // A ponder search that spends its time budget retains this flag when
+        // stopped. A later search must own a fresh stop-on-ponderhit decision.
+        pool.workers[0].stop_on_ponderhit = true;
+        let position = Position::start_pos().unwrap();
+        let mut limits = SearchLimits::new();
+        limits.depth = 3;
+        limits.time = [60_000, 60_000];
+        let result = pool
+            .start_search_async(&position, &limits)
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            result.depth, 3,
+            "a prior ponder decision must not stop the next search"
+        );
+        assert!(result.nodes > 0);
+        assert!(position.is_legal_move(result.best_move));
+    }
+
+    #[test]
+    fn clear_discards_previous_ponder_stop_decision() {
+        let mut pool = ThreadPool::new(1, 1, None);
+        pool.workers[0].stop_on_ponderhit = true;
+        pool.clear();
+        let worker = &mut pool.workers[0];
+        worker.limits.time = [60_000, 60_000];
+        worker.limits.start_time = std::time::Instant::now();
+        worker
+            .tm
+            .init(&worker.limits, crate::types::Color::White, 0, 10, false);
+        worker.check_time();
+        assert!(
+            !worker.stop.load(Ordering::Relaxed),
+            "cleared workers must not inherit ponder stop state"
+        );
     }
 
     fn store_ponder(pool: &ThreadPool, best_move: Move, ponder: Move) {

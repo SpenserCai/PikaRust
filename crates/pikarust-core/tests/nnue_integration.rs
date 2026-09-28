@@ -3,7 +3,7 @@ use pikarust_core::nnue::feature_transformer::{
 };
 use pikarust_core::nnue::simd::SimdOps;
 use pikarust_core::nnue::simd::scalar::Scalar;
-use pikarust_core::nnue::{Accumulator, Network};
+use pikarust_core::nnue::{Accumulator, ModelFormat, Network, NnueModel};
 use pikarust_core::position::Position;
 
 mod common;
@@ -23,23 +23,59 @@ fn eval_position(net: &Network, pos: &Position) -> (i32, i32) {
     )
 }
 
+#[test]
+fn test_legacy_model_retains_official_raw_evaluations() {
+    // These components were obtained from official Pikafish 76239d0b06720bfa4588989fd4ac7573e9dbf887,
+    // SHA-256 92b5fb5d333800654377a93ad8d28d0b4c8b34fb9a3d1cdaafd6ecdfb3459bb2.
+    // Search/scaling now follows the new engine even when this model is selected.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../models/pikafish-legacy-92b5fb5d.nnue");
+    let model =
+        NnueModel::load(&path).expect("legacy compatibility tests require the retained LFS model");
+    assert_eq!(model.format, ModelFormat::Legacy);
+    let network = Network::new(model);
+    let startpos = Position::start_pos().expect("startpos");
+    assert_eq!(network.evaluate_position(&startpos), (0, 192));
+    let mut psq = Accumulator::new();
+    let mut threats = Accumulator::new();
+    refresh_psq_accumulator(network.model(), &startpos, &mut psq, network.simd());
+    refresh_threat_accumulator(network.model(), &startpos, &mut threats, network.simd());
+    assert_eq!(psq.accumulation[0][..4], [2, -84, 28, 187]);
+    assert_eq!(psq.accumulation[1][..4], [2, -84, 28, 187]);
+    assert_eq!(threats.accumulation[0][..4], [-27, 25, -12, 102]);
+    for (fen, expected) in [
+        (
+            "r1bakab1r/9/2n1c2c1/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R w - - 0 5",
+            (775, 533),
+        ),
+        ("4k4/9/9/9/9/9/9/9/4r4/4K4 w - - 0 1", (-1247, -1546)),
+    ] {
+        assert_eq!(
+            network.evaluate_position(&Position::from_fen(fen).expect("fixture FEN")),
+            expected
+        );
+    }
+}
+
 // ---------------------------------------------------------------
 // End-to-end NNUE snapshot tests
-// Oracle: official-pikafish/Pikafish 76239d0b06720bfa4588989fd4ac7573e9dbf887,
-// network SHA-256 92b5fb5d333800654377a93ad8d28d0b4c8b34fb9a3d1cdaafd6ecdfb3459bb2.
+// Oracle: official-pikafish/Pikafish b562d6aeac5401879e973dc53ddb56053f07bb6a,
+// network SHA-256 7d13d73569a9b571ba0eb20cf1596247bc2a42738967e61afef6482b231e900e.
 // Components independently read from Network::evaluate in nnue/network.cpp;
-// the threat prefix comes from AccumulatorStack::latest<ThreatFeatureSet>().
+// the canonical combined accumulator comes from AccumulatorStack::latest(),
+// using the scalar upstream build to avoid architecture-specific permutations.
 // Unlike search centipawns these integer components must match exactly.
 // ---------------------------------------------------------------
 
 #[test]
 fn test_nnue_snapshot_startpos() {
     let net = common::network();
+    assert_eq!(net.model().format, ModelFormat::Current);
     let pos = Position::start_pos().expect("start_pos");
     let (psqt, positional) = eval_position(net, &pos);
     assert_eq!(psqt, 0, "startpos psqt changed: got {psqt}");
     assert_eq!(
-        positional, 192,
+        positional, 97,
         "startpos positional changed: got {positional}"
     );
 }
@@ -50,9 +86,9 @@ fn test_nnue_snapshot_midgame() {
     let fen = "r1bakab1r/9/2n1c2c1/p1p1p1p1p/9/2P6/P3P1P1P/1C2C1N2/9/RNBAKAB1R w - - 0 5";
     let pos = Position::from_fen(fen).expect("parse fen");
     let (psqt, positional) = eval_position(net, &pos);
-    assert_eq!(psqt, 775, "midgame psqt changed: got {psqt}");
+    assert_eq!(psqt, 705, "midgame psqt changed: got {psqt}");
     assert_eq!(
-        positional, 533,
+        positional, 601,
         "midgame positional changed: got {positional}"
     );
 }
@@ -63,9 +99,9 @@ fn test_nnue_snapshot_endgame() {
     let fen = "4k4/9/9/9/9/9/9/9/4r4/4K4 w - - 0 1";
     let pos = Position::from_fen(fen).expect("parse fen");
     let (psqt, positional) = eval_position(net, &pos);
-    assert_eq!(psqt, -1247, "endgame psqt changed: got {psqt}");
+    assert_eq!(psqt, -1097, "endgame psqt changed: got {psqt}");
     assert_eq!(
-        positional, -1546,
+        positional, -1182,
         "endgame positional changed: got {positional}"
     );
 }
@@ -83,9 +119,12 @@ fn test_accumulator_snapshot_startpos() {
     refresh_psq_accumulator(net.model(), &pos, &mut psq_acc, net.simd());
     refresh_threat_accumulator(net.model(), &pos, &mut threat_acc, net.simd());
 
-    assert_eq!(psq_acc.accumulation[0][0..4], [2, -84, 28, 187]);
-    assert_eq!(psq_acc.accumulation[1][0..4], [2, -84, 28, 187]);
-    assert_eq!(threat_acc.accumulation[0][0..4], [-27, 25, -12, 102]);
+    for color in 0..2 {
+        let combined: [i16; 4] = std::array::from_fn(|i| {
+            psq_acc.accumulation[color][i].wrapping_add(threat_acc.accumulation[color][i])
+        });
+        assert_eq!(combined, [138, -228, -13, -52]);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -309,8 +348,12 @@ fn test_affine_propagate_with_real_model_weights() {
 
     let mut sqr_scalar = [0u8; L2_BIG];
     let mut sqr_neon = [0u8; L2_BIG];
-    scalar_d.sqr_clipped_relu(&fc0_scalar[..L2_BIG], &mut sqr_scalar, WEIGHT_SCALE_BITS);
-    neon_d.sqr_clipped_relu(&fc0_neon[..L2_BIG], &mut sqr_neon, WEIGHT_SCALE_BITS);
+    scalar_d.sqr_clipped_relu(
+        &fc0_scalar[..L2_BIG],
+        &mut sqr_scalar,
+        WEIGHT_SCALE_BITS + 1,
+    );
+    neon_d.sqr_clipped_relu(&fc0_neon[..L2_BIG], &mut sqr_neon, WEIGHT_SCALE_BITS + 1);
     assert_eq!(
         sqr_scalar[..],
         sqr_neon[..],
@@ -319,8 +362,12 @@ fn test_affine_propagate_with_real_model_weights() {
 
     let mut relu_scalar = [0u8; L2_BIG];
     let mut relu_neon = [0u8; L2_BIG];
-    scalar_d.clipped_relu(&fc0_scalar[..L2_BIG], &mut relu_scalar, WEIGHT_SCALE_BITS);
-    neon_d.clipped_relu(&fc0_neon[..L2_BIG], &mut relu_neon, WEIGHT_SCALE_BITS);
+    scalar_d.clipped_relu(
+        &fc0_scalar[..L2_BIG],
+        &mut relu_scalar,
+        WEIGHT_SCALE_BITS + 1,
+    );
+    neon_d.clipped_relu(&fc0_neon[..L2_BIG], &mut relu_neon, WEIGHT_SCALE_BITS + 1);
     assert_eq!(
         relu_scalar[..],
         relu_neon[..],

@@ -3,11 +3,25 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# shellcheck source=scripts/reference.lock
-source "$SCRIPT_DIR/reference.lock"
 FIXTURE_DIR="$PROJECT_ROOT/tests/fixtures/pikafish"
-SOURCE_DIR="${PIKAFISH_SOURCE_DIR:-$FIXTURE_DIR/source}"
-MODEL="${PIKARUST_NNUE_MODEL:-$PROJECT_ROOT/models/pikafish.nnue}"
+REFERENCE_LOCK="$SCRIPT_DIR/reference.lock"
+if [[ "${1:-}" == --legacy ]]; then
+    REFERENCE_LOCK="$SCRIPT_DIR/reference-legacy.lock"
+    FIXTURE_DIR="$FIXTURE_DIR/legacy"
+    shift
+fi
+usage() {
+    echo "Usage: $0 [--legacy] [build | --source-only | --verify-model]" >&2
+    exit 2
+}
+[[ $# -le 1 ]] || usage
+action="${1:-build}"
+case "$action" in build|--source-only|--verify-model) ;; *) usage ;; esac
+# Both reviewed lockfiles use the same schema; no environment-selected pin.
+# shellcheck source=scripts/reference.lock
+source "$REFERENCE_LOCK"
+SOURCE_DIR="${PIKAFISH_SOURCE_DIR:-$FIXTURE_DIR/source-${PIKAFISH_COMMIT:0:12}}"
+MODEL="${PIKARUST_NNUE_MODEL:-$PROJECT_ROOT/$PIKAFISH_NNUE_FILE}"
 OUTPUT_DIR="${PIKAFISH_OUTPUT_DIR:-$FIXTURE_DIR}"
 if [[ "$OUTPUT_DIR" != /* ]]; then OUTPUT_DIR="$PROJECT_ROOT/$OUTPUT_DIR"; fi
 
@@ -26,7 +40,8 @@ verify_model() {
 }
 
 setup_source() {
-    if [[ ! -d "$SOURCE_DIR/.git" ]]; then
+    # A linked worktree has a .git file, while a normal checkout has a directory.
+    if [[ ! -e "$SOURCE_DIR/.git" ]]; then
         [[ ! -e "$SOURCE_DIR" ]] || { echo "Refusing non-git directory: $SOURCE_DIR" >&2; exit 1; }
         git init "$SOURCE_DIR"
         git -C "$SOURCE_DIR" remote add origin "$PIKAFISH_REPOSITORY"
@@ -42,11 +57,10 @@ setup_source() {
     echo "Reference: $PIKAFISH_REPOSITORY @ $PIKAFISH_COMMIT ($SOURCE_DIR)"
 }
 
-case "${1:-build}" in
+case "$action" in
     --verify-model) verify_model; exit ;;
     --source-only) setup_source; exit ;;
     build) ;;
-    *) echo "Usage: $0 [build | --source-only | --verify-model]" >&2; exit 2 ;;
 esac
 verify_model
 setup_source

@@ -187,6 +187,7 @@ impl Position {
         new_state.key ^= z.side;
         new_state.plies_from_null = 0;
         new_state.last_move = Move::NONE;
+        new_state.captured_piece = Piece::NONE;
 
         let old_state = std::mem::replace(&mut self.state, new_state);
         self.state_stack.push(old_state);
@@ -446,6 +447,34 @@ mod tests {
         pos.undo_null_move();
         assert_eq!(pos.side_to_move(), Color::White);
         assert_eq!(pos.key(), original_key, "undo null move should restore key");
+    }
+
+    #[test]
+    fn null_move_clears_capture_state_and_undo_restores_it() {
+        use crate::types::Square;
+
+        let mut pos = Position::start_pos().unwrap();
+        let capture = Move::make(Square::SQ_B2, Square::SQ_B9);
+        assert!(pos.is_legal_move(capture));
+        pos.do_move(capture, pos.gives_check(capture));
+        assert!(pos.checkers().is_empty());
+        assert_eq!(
+            pos.captured_piece(),
+            Piece::make(Color::Black, PieceType::Knight)
+        );
+        let key_after_capture = pos.key();
+        let fen_after_capture = pos.fen();
+
+        pos.do_null_move();
+        assert_eq!(pos.captured_piece(), Piece::NONE);
+
+        pos.undo_null_move();
+        assert_eq!(
+            pos.captured_piece(),
+            Piece::make(Color::Black, PieceType::Knight)
+        );
+        assert_eq!(pos.key(), key_after_capture);
+        assert_eq!(pos.fen(), fen_after_capture);
     }
 
     // -------------------------------------------------------------------

@@ -69,6 +69,18 @@ impl Drop for UciProcess {
 }
 
 #[test]
+fn searchmoves_accepts_uppercase_coordinates() {
+    let mut engine = UciProcess::spawn();
+    engine.send("uci");
+    engine.until("uciok");
+    engine.send("position startpos");
+    engine.send("go depth 1 searchmoves B0C2");
+    let bestmove = engine.until("bestmove ");
+    assert_eq!(bestmove.split_whitespace().nth(1), Some("b0c2"));
+    engine.send("quit");
+}
+
+#[test]
 fn zero_and_missing_side_clocks_return_bestmove_without_stop() {
     let mut engine = UciProcess::spawn();
     engine.send("uci");

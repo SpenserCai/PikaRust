@@ -84,6 +84,14 @@ fallback depends on the working directory and available files, it is unsuitable
 as proof that a benchmark or deployed service is using NNUE. Check `has_nnue()`
 or use an explicit constructor.
 
+The loader accepts the current and retained legacy model formats listed in
+[`models/README.md`](../models/README.md), validating the version and architecture
+hashes before decoding. `NnueModel::format` identifies the selected architecture;
+low-level callers constructing weights must supply it. The current `L2_BIG`
+width is 32; legacy propagation retains its 31-neuron path and skip output.
+The `Engine` constructors and `Network` evaluation tuple remain unchanged.
+Selecting legacy weights does not select the historical search algorithm.
+
 Internal evaluation values and normalized UCI centipawns are different units.
 Consumers should use the fields appropriate to their interface, preserve mate
 score semantics, and avoid converting a mate into an ordinary numeric cp score.

@@ -185,7 +185,7 @@ impl Position {
         let pt = pc.piece_type();
         let occupied = self.all_pieces();
 
-        match pt {
+        let follows_piece_movement = match pt {
             PieceType::Pawn => (pawn_attacks_bb(us, from) & to).is_not_empty(),
             PieceType::Cannon => {
                 if self.is_capture(m) {
@@ -201,7 +201,11 @@ impl Position {
             }
             PieceType::Advisor => (self.pseudo_attacks_advisor(from) & to).is_not_empty(),
             PieceType::King => (self.pseudo_attacks_king(from) & to).is_not_empty(),
-        }
+        };
+
+        follows_piece_movement
+            && (self.checkers().is_empty()
+                || super::movegen::generate(self, super::movegen::GenType::Evasions).contains(m))
     }
 
     pub fn gives_check(&self, m: crate::types::Move) -> bool {
@@ -396,6 +400,27 @@ impl Position {
 mod tests {
     use crate::position::Position;
     use crate::types::{Move, Square};
+
+    #[test]
+    fn pseudo_legal_in_check_requires_a_generated_evasion() {
+        let pos = Position::from_fen("4k4/9/9/9/4r4/9/P8/R8/1n7/4K4 w - - 0 1").unwrap();
+        assert_eq!(pos.checkers().popcount(), 1);
+
+        // A geometrically valid pawn move cannot answer the rook check.
+        assert!(!pos.pseudo_legal(Move::make(Square::SQ_A3, Square::SQ_A4)));
+        // Evasion generation excludes king moves along the checking rook's ray.
+        assert!(!pos.pseudo_legal(Move::make(Square::SQ_E0, Square::SQ_E1)));
+
+        let interpose = Move::make(Square::SQ_A2, Square::SQ_E2);
+        assert!(pos.pseudo_legal(interpose));
+        assert!(pos.is_legal(interpose));
+
+        // Pseudo-legality still does not imply king safety: the knight on b1
+        // attacks d0, but this king move is part of the generated evasions.
+        let unsafe_evasion = Move::make(Square::SQ_E0, Square::SQ_D0);
+        assert!(pos.pseudo_legal(unsafe_evasion));
+        assert!(!pos.is_legal(unsafe_evasion));
+    }
 
     #[test]
     fn boundary_validator_handles_every_raw_move_encoding() {

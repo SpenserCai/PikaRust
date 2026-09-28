@@ -7,7 +7,7 @@ evidence that every other layer is aligned.
 ## Reproducible inputs
 
 [`scripts/reference.lock`](../scripts/reference.lock) pins the official Pikafish
-repository, complete commit ID, and NNUE SHA-256. The actual model is tracked by
+repository, complete commit ID, model path, and NNUE SHA-256. The actual model is tracked by
 Git LFS. Start with:
 
 ```sh
@@ -31,9 +31,11 @@ For source inspection without a C++ build:
 scripts/setup-pikafish.sh --source-only
 ```
 
-The default checkout is `tests/fixtures/pikafish/source`. Set
+The default checkout is `tests/fixtures/pikafish/source-<commit-prefix>`, using
+the first 12 characters of the pinned commit, so changing the pin preserves
+existing source checkouts. Set
 `PIKAFISH_SOURCE_DIR` to another disposable path, or an existing clean checkout at
-the exact pin. The script refuses a mismatched or modified checkout rather than
+the exact pin (including a linked Git worktree). The script refuses a mismatched or modified checkout rather than
 resetting another developer's work. `BUILD_JOBS` controls build concurrency;
 `PIKAFISH_ARCH` overrides the reference build architecture. Generic x86-64 is the
 default on x86-64, so setup does not assume AVX2 support.
@@ -47,6 +49,32 @@ E2E uses the same variable to locate and verify an existing reference build.
 reference tooling. This is distinct from the native CLI's
 `PIKARUST_NNUE_FILE` runtime option. Changing the location does not relax digest
 validation.
+
+### Previous-model compatibility
+
+The previous weights remain tracked by Git LFS at
+`models/pikafish-legacy-92b5fb5d.nnue`, with their original digest and official
+revision in [`scripts/reference-legacy.lock`](../scripts/reference-legacy.lock).
+Verify both retained inputs before running model compatibility tests:
+
+```sh
+git lfs pull --include="models/*.nnue"
+scripts/setup-pikafish.sh --verify-model
+scripts/setup-pikafish.sh --legacy --verify-model
+```
+
+`scripts/setup-pikafish.sh --legacy build` builds the historical official engine
+with the previous weights under `tests/fixtures/pikafish/legacy`; `--legacy
+--source-only` only prepares its revision-specific source directory. The existing
+`PIKAFISH_SOURCE_DIR`, `PIKAFISH_OUTPUT_DIR`, and `PIKARUST_NNUE_MODEL` overrides
+still apply to an explicit legacy invocation. A model override must match the
+selected lock's digest.
+
+Normal `run-e2e.sh` and `run-bench.sh` commands always enforce the current pin.
+An old reference or model supplied to them fails verification; legacy loading
+compatibility is separate from current search parity. The retained weights have
+no automatic deletion date. A future removal requires a separate reviewed
+migration decision, including updates to compatibility tests and documentation.
 
 ## Test layers
 
@@ -103,6 +131,13 @@ together with the PikaRust revision, pinned-reference metadata, platform, and
 command when reporting a regression. CI uploads reports as workflow artifacts.
 Missing prerequisites and protocol errors fail the selected suite; an absent
 reference is not represented as a successful comparison.
+
+For upstream alignment work, use an `align/` branch. After the local gates pass,
+commit and push the branch to run the complete CI workflow before opening the
+PR, including native Linux, macOS, Windows, protocol/reference, and browser
+checks. Review the results and retained artifacts for that exact branch commit;
+create the PR only after every gate passes. A later source change requires a
+new successful run. Opening the PR also triggers the normal pull-request checks.
 
 For the HTTP/WebSocket adapter, Node.js 24 LTS runs the process-level
 request, search, cancellation, and session lifecycle checks:
@@ -333,13 +368,22 @@ sequence and configuration; it does not establish equivalent playing strength.
 ## Playing strength
 
 Run the candidate-versus-baseline experiment with a separately built previous
-PikaRust executable and a working directory containing the same pinned model:
+PikaRust executable that supports the current pinned model format, and a working
+directory containing that same model:
 
 ```sh
 PIKARUST_BASELINE_BIN=/absolute/path/to/previous/pikarust \
 PIKARUST_BASELINE_CWD=/absolute/path/to/previous/checkout \
   scripts/run-e2e.sh --filter strength_regression
 ```
+
+This is a same-model experiment: both participants must load the current
+`scripts/reference.lock` network. PikaRust v0.2.0 only supports the previous
+format and cannot serve directly as its baseline. Retaining the old weights
+does not make an old executable support the new format. A comparison across
+that format change needs a separately specified experiment with explicit model
+selection and provenance for each participant; do not substitute weights or
+relax the current experiment's digest checks to make it run.
 
 The default experiment uses 200 sampled openings, each played with both colors,
 2,000 nodes per move, and seed `20260924`. It accepts the run only when the
@@ -367,7 +411,9 @@ experiment. Each completed pair is also written to a JSONL checkpoint beside
 the report (`report.games.jsonl` for the default report path). Retain this file
 with the final report to preserve game-level evidence from interrupted runs.
 The manual `Strength experiments` workflow accepts `suite=regression` with a
-`baseline_ref` commit or tag; the baseline must contain a committed lockfile.
+`baseline_ref` commit or tag; the baseline must contain a committed lockfile and
+support the current model format. A failed model load is an invalid experiment,
+not a measured loss or evidence of a strength regression.
 
 The small paired-opening gauntlet is useful for catching illegal moves,
 termination failures, and large changes. Its sample size cannot support a strong

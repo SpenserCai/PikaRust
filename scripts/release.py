@@ -47,7 +47,8 @@ def source_info(release_version: str, sha: str) -> dict:
 
 
 def copy_notices(stage: Path) -> None:
-    for name in (*LICENSE_FILES, "scripts/reference.lock", "models/README.md", "models/LICENSE-NNUE",
+    for name in (*LICENSE_FILES, "scripts/reference.lock", "scripts/reference-legacy.lock",
+                 "models/README.md", "models/LICENSE-NNUE",
                  "README.md", "CONTRIBUTING.md"):
         target = stage / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -437,7 +438,8 @@ def validate_archive(path: Path, release_version: str, sha: str, target: str) ->
                 raise ValueError("build metadata is missing the matching GPL corresponding source")
             suffix = ".exe" if "windows" in target else ""
             required_files = (f"pikarust{suffix}", f"pikarust-server{suffix}", "SOURCE.txt",
-                        "models/LICENSE-NNUE", "models/README.md", "scripts/reference.lock", "MODEL-REQUIRED.txt")
+                        "models/LICENSE-NNUE", "models/README.md", "scripts/reference.lock",
+                        "scripts/reference-legacy.lock", "MODEL-REQUIRED.txt")
             for name in required_files:
                 required(name)
 

@@ -18,7 +18,7 @@ combined engine. Third-party notices remain applicable to their respective work.
 Upstream project: <https://github.com/official-pikafish/Pikafish>.
 
 The algorithm reference is commit
-[`76239d0b06720bfa4588989fd4ac7573e9dbf887`](https://github.com/official-pikafish/Pikafish/tree/76239d0b06720bfa4588989fd4ac7573e9dbf887),
+[`b562d6aeac5401879e973dc53ddb56053f07bb6a`](https://github.com/official-pikafish/Pikafish/tree/b562d6aeac5401879e973dc53ddb56053f07bb6a),
 also recorded in [scripts/reference.lock](scripts/reference.lock). This is the
 alignment reference, not a claim that every historical port originated at that
 revision. Git history records the Rust adaptations and subsequent changes.
@@ -57,6 +57,15 @@ alignment fixes, a library API, applications, and validation tooling. These are
 PikaRust adaptations, not unmodified upstream releases. This notice and the
 explicit GPL/MIT component declarations were added on **2026-09-24**; source
 history retains the dates and authors of earlier modifications.
+
+On **2026-09-28**, the NNUE model decoder and network layers, search and evaluation
+heuristics, time management, histories and transposition table, and checked-move
+and null-move handling were adapted to the reference above. The previous
+`76239d0b06720bfa4588989fd4ac7573e9dbf887` reference and its model remain recorded in
+[scripts/reference-legacy.lock](scripts/reference-legacy.lock) for model
+compatibility checks. Both model formats retain their original terms. PikaRust's
+library and application boundaries remain Rust adaptations of the upstream
+engine, rather than copies of its platform-specific application infrastructure.
 
 ## Independent MIT components
 

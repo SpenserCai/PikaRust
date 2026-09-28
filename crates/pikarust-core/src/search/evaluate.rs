@@ -2,10 +2,13 @@
 // Copyright (C) 2004-2026 The Stockfish developers (see notices/upstream/Pikafish-AUTHORS)
 // Copyright (c) 2026 SpenserCai and PikaRust contributors
 // Rust adaptation and modifications, 2026; see NOTICE.md for upstream sources.
+// Search/evaluation aligned with Pikafish b562d6ae, 2026-09-28.
 // Distributed without warranty; see LICENSE and notices/upstream/Pikafish-COPYRIGHT.
 
 use crate::position::Position;
-use crate::types::{VALUE_MATE_IN_MAX_PLY, VALUE_MATED_IN_MAX_PLY, Value};
+use crate::types::{
+    Color, PIECE_VALUE, Piece, PieceType, VALUE_MATE_IN_MAX_PLY, VALUE_MATED_IN_MAX_PLY, Value,
+};
 
 pub fn evaluate(
     pos: &Position,
@@ -14,18 +17,24 @@ pub fn evaluate(
     optimism: Value,
 ) -> Value {
     let nnue = nnue_psqt + nnue_positional;
-    let nnue_complexity = (nnue_psqt - nnue_positional).abs();
-
-    let adjusted_optimism = optimism + optimism * nnue_complexity / 465;
-    let adjusted_nnue = nnue - nnue * nnue_complexity / 11743;
-
-    let material = pos.total_major_material();
-
-    let mut v =
-        (adjusted_nnue * (17380 + material) + adjusted_optimism * (3061 + material)) / 20582;
+    let us = pos.side_to_move();
+    let mut simple = pos.major_material(us) - pos.major_material(!us);
+    let mut material = pos.total_major_material();
+    for pt in [PieceType::Pawn, PieceType::Advisor, PieceType::Bishop] {
+        let value = PIECE_VALUE[Piece::make(Color::White, pt)];
+        let ours = i32::from(pos.count_type(us, pt));
+        let theirs = i32::from(pos.count_type(!us, pt));
+        simple += value * (ours - theirs);
+        material += value * (ours + theirs);
+    }
+    let simple_norm = simple * 1024 / (simple.abs() + 1024);
+    let nnue_norm = nnue * 1024 / (nnue.abs() + 1024);
+    let alignment = simple_norm * nnue_norm / 512;
+    let base_eval = nnue + nnue * alignment / 65_536 + optimism * alignment / 16_384;
+    let mut v = (i64::from(base_eval) * i64::from(80_030 + material) / 80_030) as Value;
 
     let rule60 = pos.rule60_count();
-    v -= v * rule60 / 253;
+    v -= v * rule60 / 244;
 
     v.clamp(VALUE_MATED_IN_MAX_PLY + 1, VALUE_MATE_IN_MAX_PLY - 1)
 }
@@ -62,7 +71,9 @@ mod tests {
         let pos = Position::start_pos().expect("start_pos should parse");
         let v_pos = evaluate(&pos, 100, 50, 200);
         let v_neg = evaluate(&pos, 100, 50, -200);
-        assert!(v_pos > v_neg);
+        // Equal material makes alignment zero, so optimism contributes zero.
+        assert_eq!(v_pos, 176);
+        assert_eq!(v_neg, 176);
     }
 
     #[test]
@@ -145,34 +156,21 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_complexity_effect() {
+    fn test_evaluate_uses_sum_of_network_outputs() {
         let pos = Position::start_pos().expect("start_pos should parse");
-        // When psqt and positional are far apart, complexity is high
-        // This should reduce the absolute value of the evaluation
-        let v_low_complexity = evaluate(&pos, 500, 500, 0);
-        let v_high_complexity = evaluate(&pos, 1000, 0, 0);
-        // Both have same sum (1000) but different complexity
-        // High complexity should dampen the score more
-        assert!(
-            v_low_complexity.abs() >= v_high_complexity.abs(),
-            "high complexity should dampen: low={v_low_complexity}, high={v_high_complexity}"
-        );
+        // The current upstream scaling takes one raw NNUE value; the split is
+        // retained only to keep the legacy model evaluation API usable.
+        assert_eq!(evaluate(&pos, 500, 500, 0), 1178);
+        assert_eq!(evaluate(&pos, 1000, 0, 0), 1178);
     }
 
     #[test]
     fn test_evaluate_optimism_effect() {
-        let pos = Position::start_pos().expect("start_pos should parse");
-        // Optimism should shift the evaluation
-        let v_no_opt = evaluate(&pos, 300, 200, 0);
-        let v_pos_opt = evaluate(&pos, 300, 200, 500);
-        let v_neg_opt = evaluate(&pos, 300, 200, -500);
-        assert!(
-            v_pos_opt > v_no_opt,
-            "positive optimism should increase eval"
-        );
-        assert!(
-            v_neg_opt < v_no_opt,
-            "negative optimism should decrease eval"
-        );
+        let pos = Position::from_fen("3k5/9/9/9/9/9/9/9/9/4K3R w - - 0 1").unwrap();
+        // Independently calculated from b562d6ae evaluate.cpp with RookValue=1305.
+        assert_eq!(evaluate(&pos, 300, 200, 0), 510);
+        assert_eq!(evaluate(&pos, 300, 200, 500), 521);
+        assert_eq!(evaluate(&pos, 300, 200, -500), 499);
+        assert_eq!(evaluate(&pos, -300, -200, 500), -517);
     }
 }
